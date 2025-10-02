@@ -34,5 +34,11 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
-
+    'ai' => [
+        'endpoint' => env('AI_ENDPOINT'),
+        'timeout' => env('AI_TIMEOUT', 30),
+    ],
+    'n8n' => [
+        'key' => env('N8N_API_KEY'),
+    ],
 ];
