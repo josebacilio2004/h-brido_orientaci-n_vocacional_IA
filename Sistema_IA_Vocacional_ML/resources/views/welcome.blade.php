@@ -12,7 +12,7 @@
                     </svg>
                 </div>
                 <h1 class="text-5xl md:text-6xl font-bold text-white mb-6">
-                    Sistema IA Vocacional
+                    FuturoSmart
                 </h1>
                 <p class="text-xl md:text-2xl text-indigo-200 mb-8 max-w-3xl mx-auto">
                     Descubre tu futuro profesional con inteligencia artificial. 

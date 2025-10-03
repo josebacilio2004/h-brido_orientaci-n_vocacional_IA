@@ -31,6 +31,7 @@
                     </div>
                 </div>
 
+                {{-- Formulario simplificado - siempre usa la misma ruta --}}
                 <form action="{{ route('tests.save-answer', ['id' => $test->id, 'question' => $questionNumber]) }}"
                     method="POST" id="answerForm">
                     @csrf
@@ -53,19 +54,18 @@
                                             required>
                                         <div
                                             class="bg-white/5 border-2 border-gray-500 rounded-xl p-6 text-center 
-                                                transition-all duration-300 transform hover:scale-105
-                                                peer-checked:border-purple-500 peer-checked:bg-purple-600/30 
-                                                peer-checked:scale-110 peer-checked:shadow-lg">
-
+                                                    transition-all duration-300 transform hover:scale-105
+                                                    peer-checked:border-purple-500 peer-checked:bg-purple-600/30 
+                                                    peer-checked:scale-110 peer-checked:shadow-lg">
                                             <div
-                                                class="text-3xl font-bold text-gray-400 
-                                                    peer-checked:text-purple-200 mb-2 transition-colors duration-300">
-                                                {{ $i }}</div>
+                                                class="text-3xl font-bold text-gray-400 peer-checked:text-purple-200 mb-2 transition-colors duration-300">
+                                                {{ $i }}
+                                            </div>
                                             <div
                                                 class="text-xs text-gray-500 peer-checked:text-purple-100 transition-colors duration-300">
-                                                {{ $labels[$i - 1] }}</div>
+                                                {{ $labels[$i - 1] }}
+                                            </div>
                                         </div>
-
                                     </label>
                                 @endfor
                             </div>
@@ -147,22 +147,26 @@
                             </a>
                         @endif
 
-                        <button type="submit"
-                            class="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-4 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 transition-all flex items-center justify-center gap-2">
-                            @if ($questionNumber < $test->total_questions)
+                        {{-- Botón simplificado - mismo comportamiento para todas las preguntas --}}
+                        @if ($questionNumber < $test->total_questions)
+                            <button type="submit"
+                                class="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-4 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 transition-all flex items-center justify-center gap-2">
                                 Siguiente
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7">
                                     </path>
                                 </svg>
-                            @else
+                            </button>
+                        @else
+                            <button type="submit"
+                                class="flex-1 bg-green-600 text-white px-6 py-4 rounded-lg font-semibold hover:bg-green-700 transition-all flex items-center justify-center gap-2">
                                 Finalizar Test
                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                         d="M5 13l4 4L19 7"></path>
                                 </svg>
-                            @endif
-                        </button>
+                            </button>
+                        @endif
                     </div>
                 </form>
             </div>
@@ -177,14 +181,26 @@
         </div>
     </div>
 
+    {{-- Script simplificado - auto-envío solo para preguntas que no son la última --}}
     <script>
-        // Auto-submit cuando se selecciona una opción (opcional, comentado por defecto)
-        // document.querySelectorAll('input[name="answer"]').forEach(input => {
-        //     input.addEventListener('change', function() {
-        //         setTimeout(() => {
-        //             document.getElementById('answerForm').submit();
-        //         }, 300);
-        //     });
-        // });
+        @if ($questionNumber < $test->total_questions)
+            // Auto-enviar para preguntas intermedias
+            document.querySelectorAll('input[name="answer"]').forEach(input => {
+                input.addEventListener('change', function() {
+                    setTimeout(() => {
+                        document.getElementById('answerForm').submit();
+                    }, 300);
+                });
+            });
+        @else
+            // Para la última pregunta, solo verificar que haya respuesta
+            document.getElementById('answerForm').addEventListener('submit', function(e) {
+                const selectedAnswer = document.querySelector('input[name="answer"]:checked');
+                if (!selectedAnswer) {
+                    e.preventDefault();
+                    alert('Por favor selecciona una respuesta antes de finalizar el test.');
+                }
+            });
+        @endif
     </script>
 @endsection

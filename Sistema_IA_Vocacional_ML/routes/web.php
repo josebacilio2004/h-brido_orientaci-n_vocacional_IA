@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\TestController;
+use App\Http\Controllers\ClusteringController;
 
 // Página principal
 Route::get('/', function () {
@@ -24,20 +25,30 @@ Route::middleware('auth')->group(function () {
     Route::get('/dashboard/careers', [DashboardController::class, 'careers'])->name('dashboard.careers');
     Route::get('/dashboard/recommendations', [DashboardController::class, 'recommendations'])->name('dashboard.recommendations');
     Route::get('/dashboard/profile', [DashboardController::class, 'profile'])->name('dashboard.profile');
-    
+
     Route::prefix('tests')->name('tests.')->group(function () {
         Route::get('/', [TestController::class, 'index'])->name('index');
-        Route::get('/{id}', [TestController::class, 'show'])->name('show');
-        Route::get('/{id}/start', [TestController::class, 'start'])->name('start');
-        Route::get('/{id}/question/{question}', [TestController::class, 'question'])->name('question');
-        Route::post('/{id}/question/{question}', [TestController::class, 'saveAnswer'])->name('save-answer');
-        Route::get('/{id}/process', [TestController::class, 'process'])->name('process');
-        Route::post('/{id}/submit', [TestController::class, 'submit'])->name('submit');
-        Route::get('/{id}/result', [TestController::class, 'result'])->name('result');
-        
-        // Rutas para predicción con IA basada en notas
+
+        // Rutas de predicción con IA (sin {id})
         Route::get('/grades/form', [TestController::class, 'gradesForm'])->name('grades');
         Route::post('/grades/submit', [TestController::class, 'submitGrades'])->name('grades.submit');
         Route::get('/ai/result', [TestController::class, 'aiResult'])->name('ai-result');
+
+        // Rutas específicas del test (con {id})
+        Route::get('/{id}/start', [TestController::class, 'start'])->name('start');
+        Route::get('/{id}/restart', [TestController::class, 'restart'])->name('restart');
+        Route::get('/{id}/question/{question}', [TestController::class, 'question'])->name('question');
+        Route::post('/{id}/question/{question}', [TestController::class, 'saveAnswer'])->name('save-answer');
+        Route::get('/{id}/process', [TestController::class, 'process'])->name('process');
+        Route::get('/{id}/result', [TestController::class, 'result'])->name('result');
+        Route::post('/{id}/finalize-last', [TestController::class, 'finalizeFromLastQuestion'])
+            ->name('tests.finalize-last');
+        // Ruta genérica al final
+        Route::get('/{id}', [TestController::class, 'show'])->name('show');
+    });
+
+    Route::prefix('clustering')->name('clustering.')->group(function () {
+        Route::get('/dashboard', [ClusteringController::class, 'dashboard'])->name('dashboard');
+        Route::get('/data', [ClusteringController::class, 'getClusteringData'])->name('data');
     });
 });

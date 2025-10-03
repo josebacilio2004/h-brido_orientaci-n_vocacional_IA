@@ -144,7 +144,7 @@
                                 </path>
                             </svg>
                         </div>
-                        <span class="text-white font-bold text-lg">IA Vocacional</span>
+                        <span class="text-white font-bold text-lg">FuturoSmart</span>
                     </div>
                 </div>
 
