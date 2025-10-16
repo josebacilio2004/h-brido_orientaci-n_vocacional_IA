@@ -2,39 +2,43 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\VocationalTest;
-use App\Models\TestQuestion;
-use App\Models\TestResponse;
-use App\Models\TestResult;
-use App\Models\StudentGrade;
-use App\Models\AIPrediction;
+use App\Repositories\TestRepository;
+use App\Repositories\GradeRepository;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Routing\Controller as BaseController;
 
-class TestController extends Controller
+class TestController extends BaseController
 {
-    protected $middleware = ['auth'];
+    protected $testRepository;
+    protected $gradeRepository;
+
+    public function __construct(TestRepository $testRepository, GradeRepository $gradeRepository)
+    {
+        $this->middleware('auth');
+        $this->testRepository = $testRepository;
+        $this->gradeRepository = $gradeRepository;
+    }
 
     public function index()
     {
-        $tests = VocationalTest::where('is_active', true)->get();
-        $completedTests = TestResult::where('user_id', Auth::id())
-            ->pluck('vocational_test_id')
-            ->toArray();
+        $tests = $this->testRepository->getActiveTests();
+        $completedTests = $this->testRepository->getUserCompletedTests(Auth::id());
 
         return view('tests.index', compact('tests', 'completedTests'));
     }
 
     public function show($id)
     {
-        $test = VocationalTest::with('questions')->findOrFail($id);
+        $test = $this->testRepository->getTestWithQuestions($id);
 
-        $hasCompleted = TestResult::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->exists();
+        if (!$test) {
+            abort(404, 'Test no encontrado');
+        }
+
+        $hasCompleted = $this->testRepository->hasUserCompletedTest(Auth::id(), $id);
 
         if ($hasCompleted) {
             return redirect()->route('tests.result', $id)
@@ -46,18 +50,19 @@ class TestController extends Controller
 
     public function result($id)
     {
-        $result = TestResult::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->with('test')
-            ->latest()
-            ->firstOrFail();
+        $result = $this->testRepository->getUserTestResult(Auth::id(), $id);
+
+        if (!$result) {
+            return redirect()->route('tests.index')
+                ->with('error', 'No se encontró el resultado del test.');
+        }
 
         return view('tests.result', compact('result'));
     }
 
     public function gradesForm()
     {
-        $grades = StudentGrade::where('user_id', Auth::id())->first();
+        $grades = $this->gradeRepository->getUserGrades(Auth::id());
         return view('tests.grades', compact('grades'));
     }
 
@@ -75,10 +80,8 @@ class TestController extends Controller
             'nota_educacion_trabajo' => 'required|integer|min:0|max:20',
         ]);
 
-        $user = Auth::user();
-
-        $grades = StudentGrade::updateOrCreate(
-            ['user_id' => $user->id],
+        $grades = $this->gradeRepository->saveOrUpdateGrades(
+            Auth::id(),
             array_merge($validated, ['academic_year' => date('Y')])
         );
 
@@ -93,20 +96,20 @@ class TestController extends Controller
         }
     }
 
-    private function getPredictionFromAI(StudentGrade $grades)
+    private function getPredictionFromAI($grades)
     {
         $apiUrl = env('ML_API_URL', 'http://localhost:8000/predict');
 
         $data = [
-            'Nota_Matematica' => $grades->nota_matematica,
-            'Nota_Comunicacion' => $grades->nota_comunicacion,
-            'Nota_Ciencias_Sociales' => $grades->nota_ciencias_sociales,
-            'Nota_Ciencia_Tecnologia' => $grades->nota_ciencia_tecnologia,
-            'Nota_Desarrollo_Personal' => $grades->nota_desarrollo_personal,
-            'Nota_Ciudadania_Civica' => $grades->nota_ciudadania_civica,
-            'Nota_Educacion_Fisica' => $grades->nota_educacion_fisica,
-            'Nota_Ingles' => $grades->nota_ingles,
-            'Nota_Educacion_Trabajo' => $grades->nota_educacion_trabajo,
+            'Nota_Matematica' => $grades['nota_matematica'],
+            'Nota_Comunicacion' => $grades['nota_comunicacion'],
+            'Nota_Ciencias_Sociales' => $grades['nota_ciencias_sociales'],
+            'Nota_Ciencia_Tecnologia' => $grades['nota_ciencia_tecnologia'],
+            'Nota_Desarrollo_Personal' => $grades['nota_desarrollo_personal'],
+            'Nota_Ciudadania_Civica' => $grades['nota_ciudadania_civica'],
+            'Nota_Educacion_Fisica' => $grades['nota_educacion_fisica'],
+            'Nota_Ingles' => $grades['nota_ingles'],
+            'Nota_Educacion_Trabajo' => $grades['nota_educacion_trabajo'],
         ];
 
         $response = Http::timeout(10)->post($apiUrl, $data);
@@ -114,14 +117,14 @@ class TestController extends Controller
         if ($response->successful()) {
             $result = $response->json();
 
-            AIPrediction::create([
-                'user_id' => Auth::id(),
-                'input_data' => $data,
-                'predicted_career' => $result['carrera_recomendada'] ?? 'No definida',
-                'confidence' => $result['confidence'] ?? 0,
-                'top_careers' => $result['top_careers'] ?? [],
-                'model_version' => $result['model_version'] ?? '1.0'
-            ]);
+            $this->testRepository->savePrediction(
+                Auth::id(),
+                $data,
+                $result['carrera_recomendada'] ?? 'No definida',
+                $result['confidence'] ?? 0,
+                $result['top_careers'] ?? [],
+                $result['model_version'] ?? '1.0'
+            );
 
             return $result;
         }
@@ -131,9 +134,7 @@ class TestController extends Controller
 
     public function aiResult()
     {
-        $prediction = AIPrediction::where('user_id', Auth::id())
-            ->latest()
-            ->first();
+        $prediction = $this->testRepository->getLatestPrediction(Auth::id());
 
         if (!$prediction) {
             return redirect()->route('tests.grades')
@@ -143,55 +144,23 @@ class TestController extends Controller
         return view('tests.ai-result', compact('prediction'));
     }
 
-    private function calculateScore($question, $answer)
-    {
-        switch ($question->type) {
-            case 'scale':
-                return (int) $answer;
-            case 'yes_no':
-                return $answer === 'yes' ? 5 : 0;
-            case 'multiple_choice':
-                return 3;
-            default:
-                return 0;
-        }
-    }
-
-    private function getCareersForCategory($category)
-    {
-        $careerMap = [
-            'tecnologia' => ['Ingeniería de Sistemas', 'Ingeniería Electrónica', 'Ciencias de la Computación'],
-            'ciencias' => ['Medicina', 'Biología', 'Química', 'Física'],
-            'humanidades' => ['Psicología', 'Derecho', 'Educación', 'Trabajo Social'],
-            'negocios' => ['Administración', 'Economía', 'Contabilidad', 'Marketing'],
-            'artes' => ['Diseño Gráfico', 'Arquitectura', 'Comunicación Audiovisual'],
-        ];
-
-        return $careerMap[$category] ?? ['Carrera General'];
-    }
-
     public function start($id)
     {
-        $test = VocationalTest::findOrFail($id);
+        $test = $this->testRepository->getTestById($id);
 
-        $hasCompleted = TestResult::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->exists();
+        if (!$test) {
+            abort(404, 'Test no encontrado');
+        }
+
+        $hasCompleted = $this->testRepository->hasUserCompletedTest(Auth::id(), $id);
 
         if ($hasCompleted) {
             return redirect()->route('tests.result', $id)
                 ->with('info', 'Ya has completado este test.');
         }
 
-        // CORREGIDO: Especificar tabla en el where para evitar ambigüedad
-        $lastResponse = TestResponse::where('user_id', Auth::id())
-            ->where('test_responses.vocational_test_id', $id) // ← ESPECIFICAR TABLA
-            ->join('test_questions', 'test_responses.test_question_id', '=', 'test_questions.id')
-            ->orderByDesc('test_questions.question_number')
-            ->select('test_questions.question_number')
-            ->first();
-
-        $nextQuestion = $lastResponse ? min($lastResponse->question_number + 1, $test->total_questions) : 1;
+        $lastQuestionNumber = $this->testRepository->getLastAnsweredQuestion(Auth::id(), $id);
+        $nextQuestion = $lastQuestionNumber ? min($lastQuestionNumber + 1, $test->total_questions) : 1;
 
         return redirect()->route('tests.question', [
             'id' => $id,
@@ -201,13 +170,8 @@ class TestController extends Controller
 
     public function restart($id)
     {
-        TestResponse::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->delete();
-
-        TestResult::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->delete();
+        $this->testRepository->deleteUserResponses(Auth::id(), $id);
+        $this->testRepository->deleteUserResult(Auth::id(), $id);
 
         return redirect()->route('tests.start', $id)
             ->with('success', 'Test reiniciado correctamente.');
@@ -215,26 +179,26 @@ class TestController extends Controller
 
     public function question($id, $questionNumber)
     {
-        $test = VocationalTest::with('questions')->findOrFail($id);
+        $test = $this->testRepository->getTestWithQuestions($id);
+
+        if (!$test) {
+            abort(404, 'Test no encontrado');
+        }
 
         if ($questionNumber < 1 || $questionNumber > $test->total_questions) {
             return redirect()->route('tests.start', $id);
         }
 
-        $question = $test->questions()
-            ->where('question_number', $questionNumber)
-            ->firstOrFail();
+        $question = $this->testRepository->getQuestionByNumber($id, $questionNumber);
 
-        $previousAnswer = TestResponse::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->where('test_question_id', $question->id)
-            ->first();
+        if (!$question) {
+            abort(404, 'Pregunta no encontrada');
+        }
+
+        $previousAnswer = $this->testRepository->getUserAnswer(Auth::id(), $id, $question->id);
 
         $progress = ($questionNumber / $test->total_questions) * 100;
-
-        $answeredCount = TestResponse::where('user_id', Auth::id())
-            ->where('vocational_test_id', $id)
-            ->count();
+        $answeredCount = $this->testRepository->countUserAnswers(Auth::id(), $id);
 
         return view('tests.question', compact('test', 'question', 'questionNumber', 'progress', 'answeredCount', 'previousAnswer'));
     }
@@ -249,35 +213,30 @@ class TestController extends Controller
                 'answer' => 'required'
             ]);
 
-            $test = VocationalTest::findOrFail($id);
-            $question = TestQuestion::where('vocational_test_id', $id)
-                ->where('question_number', $questionNumber)
-                ->firstOrFail();
+            $test = $this->testRepository->getTestById($id);
+            $question = $this->testRepository->getQuestionByNumber($id, $questionNumber);
+
+            if (!$test || !$question) {
+                throw new \Exception('Test o pregunta no encontrada');
+            }
 
             $score = $this->calculateScore($question, $validated['answer']);
 
-            // ✅ CORREGIDO: Sintaxis correcta del array
-            TestResponse::updateOrCreate(
-                [
-                    'user_id' => Auth::id(),
-                    'vocational_test_id' => $id,  // ← CORREGIDO: 'clave' => valor
-                    'test_question_id' => $question->id
-                ],
-                [
-                    'answer' => $validated['answer'],
-                    'score' => $score,
-                ]
+            $this->testRepository->saveAnswer(
+                Auth::id(),
+                $id,
+                $question->id,
+                $validated['answer'],
+                $score
             );
 
             Log::info("Respuesta guardada correctamente");
 
-            // Si es la última pregunta, procesar el test
             if ($questionNumber == $test->total_questions) {
                 Log::info("Última pregunta alcanzada - procesando test");
                 return $this->processTest($id);
             }
 
-            // Si no es la última, ir a la siguiente pregunta
             return redirect()->route('tests.question', [
                 'id' => $id,
                 'question' => $questionNumber + 1
@@ -292,32 +251,18 @@ class TestController extends Controller
     {
         Log::info("=== PROCESANDO TEST ===");
 
-        DB::beginTransaction();
         try {
-            $test = VocationalTest::findOrFail($id);
+            $test = $this->testRepository->getTestById($id);
             $user = Auth::user();
 
-            // Verificar que tengamos todas las respuestas
-            $totalResponses = TestResponse::where('user_id', $user->id)
-                ->where('vocational_test_id', $id)
-                ->count();
+            $totalResponses = $this->testRepository->countUserAnswers($user->id, $id);
 
             Log::info("Respuestas encontradas: {$totalResponses}/{$test->total_questions}");
 
             if ($totalResponses < $test->total_questions) {
-                DB::rollBack();
                 Log::warning("Faltan respuestas");
 
-                // Encontrar primera pregunta sin responder
-                $answeredQuestions = TestResponse::where('user_id', $user->id)
-                    ->where('vocational_test_id', $id)
-                    ->pluck('test_question_id')
-                    ->toArray();
-
-                $firstUnanswered = TestQuestion::where('vocational_test_id', $id)
-                    ->whereNotIn('id', $answeredQuestions)
-                    ->orderBy('question_number')
-                    ->first();
+                $firstUnanswered = $this->testRepository->getFirstUnansweredQuestion($user->id, $id);
 
                 if ($firstUnanswered) {
                     return redirect()->route('tests.question', [
@@ -327,14 +272,7 @@ class TestController extends Controller
                 }
             }
 
-            // CORREGIDO: Especificar tabla en el JOIN para evitar ambigüedad
-            $scores = TestResponse::where('user_id', $user->id)
-                ->where('test_responses.vocational_test_id', $id) // ← ESPECIFICAR TABLA
-                ->join('test_questions', 'test_responses.test_question_id', '=', 'test_questions.id')
-                ->select('test_questions.category', DB::raw('SUM(test_responses.score) as total'))
-                ->groupBy('test_questions.category')
-                ->pluck('total', 'category')
-                ->toArray();
+            $scores = $this->testRepository->calculateScoresByCategory($user->id, $id);
 
             Log::info("Puntajes calculados:", $scores);
 
@@ -342,33 +280,23 @@ class TestController extends Controller
                 throw new \Exception("No se pudieron calcular los puntajes");
             }
 
-            // Generar recomendaciones
             $recommendedCareers = $this->getRecommendedCareersRIASEC($scores);
             $analysis = $this->generateRIASECAnalysis($scores, $recommendedCareers);
 
-            // Guardar resultado
-            $result = TestResult::updateOrCreate(
-                [
-                    'user_id' => $user->id,
-                    'vocational_test_id' => $id
-                ],
-                [
-                    'scores' => $scores,
-                    'recommended_careers' => $recommendedCareers,
-                    'analysis' => $analysis,
-                    'total_score' => array_sum($scores),
-                    'completed_at' => now()
-                ]
+            $result = $this->testRepository->saveResult(
+                $user->id,
+                $id,
+                $scores,
+                $recommendedCareers,
+                $analysis,
+                array_sum($scores)
             );
 
             Log::info("Resultado guardado ID: {$result->id}");
 
-            DB::commit();
-
             return redirect()->route('tests.result', $id)
                 ->with('success', '¡Test completado exitosamente!');
         } catch (\Exception $e) {
-            DB::rollBack();
             Log::error("Error procesando test: " . $e->getMessage());
             Log::error($e->getTraceAsString());
 
@@ -384,26 +312,25 @@ class TestController extends Controller
         return $this->processTest($id);
     }
 
-    // CORREGIDO: Agregar método para finalizar desde última pregunta
     public function finalizeFromLastQuestion(Request $request, $id)
     {
         Log::info("=== FINALIZAR DESDE ÚLTIMA PREGUNTA ===");
         Log::info("Test ID: {$id}, Usuario: " . Auth::id());
 
         try {
-            $test = VocationalTest::findOrFail($id);
+            $test = $this->testRepository->getTestById($id);
             $lastQuestionNumber = $test->total_questions;
 
             Log::info("Buscando última pregunta: número {$lastQuestionNumber}");
 
-            // Buscar la última pregunta
-            $question = TestQuestion::where('vocational_test_id', $id)
-                ->where('question_number', $lastQuestionNumber)
-                ->firstOrFail();
+            $question = $this->testRepository->getQuestionByNumber($id, $lastQuestionNumber);
+
+            if (!$question) {
+                throw new \Exception('Última pregunta no encontrada');
+            }
 
             Log::info("Última pregunta encontrada: ID {$question->id}");
 
-            // Validar y guardar respuesta
             $validated = $request->validate([
                 'answer' => 'required'
             ]);
@@ -412,22 +339,16 @@ class TestController extends Controller
 
             Log::info("Guardando respuesta: {$validated['answer']}, score: {$score}");
 
-            // Guardar respuesta de la última pregunta
-            TestResponse::updateOrCreate(
-                [
-                    'user_id' => Auth::id(),
-                    'vocational_test_id' => $id,
-                    'test_question_id' => $question->id
-                ],
-                [
-                    'answer' => $validated['answer'],
-                    'score' => $score,
-                ]
+            $this->testRepository->saveAnswer(
+                Auth::id(),
+                $id,
+                $question->id,
+                $validated['answer'],
+                $score
             );
 
             Log::info("Última respuesta guardada exitosamente");
 
-            // Llamar al método de finalización
             return $this->processTest($id);
         } catch (\Exception $e) {
             Log::error("Error al finalizar desde última pregunta: " . $e->getMessage());
@@ -437,6 +358,20 @@ class TestController extends Controller
                 'id' => $id,
                 'question' => $lastQuestionNumber ?? 1
             ])->with('error', 'Error al finalizar el test: ' . $e->getMessage());
+        }
+    }
+
+    private function calculateScore($question, $answer)
+    {
+        switch ($question->type) {
+            case 'scale':
+                return (int) $answer;
+            case 'yes_no':
+                return $answer === 'yes' ? 5 : 0;
+            case 'multiple_choice':
+                return 3;
+            default:
+                return 0;
         }
     }
 

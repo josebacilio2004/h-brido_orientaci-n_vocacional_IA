@@ -14,6 +14,11 @@ class Career extends Model
         'code',
         'description',
         'category',
+        'faculty', // Agregado
+        'university', // Agregado
+        'campus', // Agregado
+        'riasec_profile', // Agregado
+        'riasec_scores', // Agregado
         'required_skills',
         'related_subjects',
         'average_salary',
@@ -25,6 +30,7 @@ class Career extends Model
     protected $casts = [
         'required_skills' => 'array',
         'related_subjects' => 'array',
+        'riasec_scores' => 'array', // Agregado
         'average_salary' => 'decimal:2',
     ];
 }

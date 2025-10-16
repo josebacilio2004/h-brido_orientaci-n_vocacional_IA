@@ -2,7 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\DashBoardController;
 use App\Http\Controllers\TestController;
 use App\Http\Controllers\ClusteringController;
 
@@ -20,11 +20,11 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
 // Rutas del dashboard (requieren autenticación)
 Route::middleware('auth')->group(function () {
-    Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
-    Route::get('/dashboard/tests', [DashboardController::class, 'tests'])->name('dashboard.tests');
-    Route::get('/dashboard/careers', [DashboardController::class, 'careers'])->name('dashboard.careers');
-    Route::get('/dashboard/recommendations', [DashboardController::class, 'recommendations'])->name('dashboard.recommendations');
-    Route::get('/dashboard/profile', [DashboardController::class, 'profile'])->name('dashboard.profile');
+    Route::get('/dashboard', [DashBoardController::class, 'index'])->name('dashboard');
+    Route::get('/dashboard/tests', [DashBoardController::class, 'tests'])->name('dashboard.tests');
+    Route::get('/dashboard/careers', [DashBoardController::class, 'careers'])->name('dashboard.careers');
+    Route::get('/dashboard/recommendations', [DashBoardController::class, 'recommendations'])->name('dashboard.recommendations');
+    Route::get('/dashboard/profile', [DashBoardController::class, 'profile'])->name('dashboard.profile');
 
     Route::prefix('tests')->name('tests.')->group(function () {
         Route::get('/', [TestController::class, 'index'])->name('index');

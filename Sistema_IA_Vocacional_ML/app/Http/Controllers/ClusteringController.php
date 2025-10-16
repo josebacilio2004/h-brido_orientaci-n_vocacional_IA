@@ -2,24 +2,23 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\TestResult;
-use App\Models\User;
+use App\Repositories\ClusteringRepository;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class ClusteringController extends Controller
 {
-    /**
-     * Mostrar dashboard de análisis de clustering
-     */
+    protected $clusteringRepository;
+
+    public function __construct(ClusteringRepository $clusteringRepository)
+    {
+        $this->clusteringRepository = $clusteringRepository;
+    }
+
     public function dashboard()
     {
-        // Obtener todos los resultados de tests completados
-        $results = TestResult::with('user')
-            ->whereNotNull('completed_at')
-            ->get();
+        $results = $this->clusteringRepository->getAllCompletedTests();
 
-        if ($results->count() < 10) {
+        if (count($results) < 10) {
             return view('clustering.dashboard')->with('error', 'Se necesitan al menos 10 tests completados para realizar el análisis de clustering.');
         }
 
@@ -27,7 +26,7 @@ class ClusteringController extends Controller
         $data = $this->prepareDataForClustering($results);
 
         // Aplicar K-Means clustering
-        $clusters = $this->kMeansClustering($data, 6); // 6 clusters para RIASEC
+        $clusters = $this->kMeansClustering($data, 6);
 
         // Calcular estadísticas por cluster
         $clusterStats = $this->calculateClusterStatistics($clusters, $results);
@@ -38,15 +37,12 @@ class ClusteringController extends Controller
         return view('clustering.dashboard', compact('clusterStats', 'trends', 'results'));
     }
 
-    /**
-     * Preparar datos para clustering
-     */
     private function prepareDataForClustering($results)
     {
         $data = [];
 
         foreach ($results as $result) {
-            $scores = $result->scores;
+            $scores = is_string($result['scores']) ? json_decode($result['scores'], true) : $result['scores'];
             
             // Normalizar puntajes (0-1)
             $normalized = [];
@@ -55,8 +51,8 @@ class ClusteringController extends Controller
             }
 
             $data[] = [
-                'id' => $result->id,
-                'user_id' => $result->user_id,
+                'id' => $result['id'],
+                'user_id' => $result['user_id'],
                 'features' => $normalized,
                 'scores' => $scores
             ];
@@ -65,9 +61,6 @@ class ClusteringController extends Controller
         return $data;
     }
 
-    /**
-     * Implementación de K-Means clustering
-     */
     private function kMeansClustering($data, $k = 6, $maxIterations = 100)
     {
         $n = count($data);
@@ -149,9 +142,6 @@ class ClusteringController extends Controller
         ];
     }
 
-    /**
-     * Calcular distancia euclidiana entre dos puntos
-     */
     private function euclideanDistance($point1, $point2)
     {
         $sum = 0;
@@ -161,9 +151,6 @@ class ClusteringController extends Controller
         return sqrt($sum);
     }
 
-    /**
-     * Calcular estadísticas por cluster
-     */
     private function calculateClusterStatistics($clusteringResult, $results)
     {
         $clusters = $clusteringResult['clusters'];
@@ -186,10 +173,16 @@ class ClusteringController extends Controller
             // Calcular carreras más comunes en este cluster
             $careers = [];
             foreach ($clusterData as $point) {
-                $result = $results->firstWhere('id', $point['id']);
-                if ($result && isset($result->recommended_careers[0]['careers'])) {
-                    foreach ($result->recommended_careers[0]['careers'] as $career) {
-                        $careers[] = $career;
+                $result = collect($results)->firstWhere('id', $point['id']);
+                if ($result) {
+                    $recommendedCareers = is_string($result['recommended_careers']) 
+                        ? json_decode($result['recommended_careers'], true) 
+                        : $result['recommended_careers'];
+                    
+                    if (isset($recommendedCareers[0]['careers'])) {
+                        foreach ($recommendedCareers[0]['careers'] as $career) {
+                            $careers[] = $career;
+                        }
                     }
                 }
             }
@@ -223,9 +216,6 @@ class ClusteringController extends Controller
         return $stats;
     }
 
-    /**
-     * Analizar tendencias generales
-     */
     private function analyzeTrends($results)
     {
         $categories = ['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'];
@@ -233,7 +223,8 @@ class ClusteringController extends Controller
         // Calcular promedios generales
         $avgScores = [];
         foreach ($categories as $category) {
-            $scores = $results->pluck('scores')->map(function($scores) use ($category) {
+            $scores = collect($results)->map(function($result) use ($category) {
+                $scores = is_string($result['scores']) ? json_decode($result['scores'], true) : $result['scores'];
                 return $scores[$category] ?? 0;
             });
             $avgScores[$category] = round($scores->avg(), 1);
@@ -243,14 +234,15 @@ class ClusteringController extends Controller
         arsort($avgScores);
         $mostPopular = array_key_first($avgScores);
 
-        // Calcular distribución de género (si está disponible)
-        $genderDistribution = $results->groupBy('user.gender')->map->count();
-
         // Carreras más recomendadas
         $allCareers = [];
         foreach ($results as $result) {
-            if (isset($result->recommended_careers[0]['careers'])) {
-                foreach ($result->recommended_careers[0]['careers'] as $career) {
+            $recommendedCareers = is_string($result['recommended_careers']) 
+                ? json_decode($result['recommended_careers'], true) 
+                : $result['recommended_careers'];
+            
+            if (isset($recommendedCareers[0]['careers'])) {
+                foreach ($recommendedCareers[0]['careers'] as $career) {
                     $allCareers[] = $career;
                 }
             }
@@ -260,25 +252,19 @@ class ClusteringController extends Controller
         $topCareers = array_slice($careerCounts, 0, 10, true);
 
         return [
-            'total_tests' => $results->count(),
+            'total_tests' => count($results),
             'avg_scores' => $avgScores,
             'most_popular_profile' => $mostPopular,
-            'gender_distribution' => $genderDistribution,
             'top_careers' => $topCareers,
-            'completion_rate' => 100 // Todos los resultados están completados
+            'completion_rate' => 100
         ];
     }
 
-    /**
-     * API endpoint para obtener datos de clustering en JSON
-     */
     public function getClusteringData()
     {
-        $results = TestResult::with('user')
-            ->whereNotNull('completed_at')
-            ->get();
+        $results = $this->clusteringRepository->getAllCompletedTests();
 
-        if ($results->count() < 10) {
+        if (count($results) < 10) {
             return response()->json(['error' => 'Datos insuficientes'], 400);
         }
 
@@ -288,7 +274,7 @@ class ClusteringController extends Controller
 
         return response()->json([
             'clusters' => $clusterStats,
-            'total_results' => $results->count()
+            'total_results' => count($results)
         ]);
     }
 }
