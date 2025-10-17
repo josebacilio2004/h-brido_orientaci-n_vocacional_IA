@@ -2,36 +2,30 @@
 
 namespace App\Repositories;
 
-use App\Models\StudentGrade;
-use Illuminate\Support\Facades\DB;
+use App\DAO\Interfaces\GradeDAOInterface;
 
 class GradeRepository
 {
-    
+    private GradeDAOInterface $gradeDAO;
+
+    public function __construct(GradeDAOInterface $gradeDAO)
+    {
+        $this->gradeDAO = $gradeDAO;
+    }
+
     /**
      * Guardar notas académicas
      */
     public function saveGrades(int $userId, array $grades, int $academicYear)
     {
-        $grade = StudentGrade::updateOrCreate(
-            [
-                'user_id' => $userId,
-                'academic_year' => $academicYear
-            ],
-            [
-                'nota_matematica' => $grades['nota_matematica'],
-                'nota_comunicacion' => $grades['nota_comunicacion'],
-                'nota_ciencias_sociales' => $grades['nota_ciencias_sociales'],
-                'nota_ciencia_tecnologia' => $grades['nota_ciencia_tecnologia'],
-                'nota_desarrollo_personal' => $grades['nota_desarrollo_personal'],
-                'nota_ciudadania_civica' => $grades['nota_ciudadania_civica'],
-                'nota_educacion_fisica' => $grades['nota_educacion_fisica'],
-                'nota_ingles' => $grades['nota_ingles'],
-                'nota_educacion_trabajo' => $grades['nota_educacion_trabajo']
-            ]
-        );
-
-        return $grade;
+        // Guardar cada nota individual
+        foreach ($grades as $subject => $grade) {
+            if ($subject !== 'academic_year') {
+                $this->gradeDAO->saveGrade($userId, $subject, $grade);
+            }
+        }
+        
+        return $this->gradeDAO->getStudentGrades($userId);
     }
 
     /**
@@ -48,9 +42,7 @@ class GradeRepository
      */
     public function getGrades(int $userId)
     {
-        return StudentGrade::where('user_id', $userId)
-            ->orderBy('academic_year', 'desc')
-            ->first();
+        return $this->gradeDAO->getStudentGrades($userId)->first();
     }
 
     /**
@@ -66,8 +58,38 @@ class GradeRepository
      */
     public function getAllGradesByYear(int $userId)
     {
-        return StudentGrade::where('user_id', $userId)
-            ->orderBy('academic_year', 'desc')
-            ->get();
+        return $this->gradeDAO->getStudentGrades($userId);
+    }
+
+    /**
+     * Obtener promedio de notas
+     */
+    public function getAverageGrade(int $userId)
+    {
+        return $this->gradeDAO->getAverageGrade($userId);
+    }
+
+    /**
+     * Actualizar nota
+     */
+    public function updateGrade(int $id, float $grade)
+    {
+        return $this->gradeDAO->updateGrade($id, $grade);
+    }
+
+    /**
+     * Eliminar nota
+     */
+    public function deleteGrade(int $id)
+    {
+        return $this->gradeDAO->deleteGrade($id);
+    }
+
+    /**
+     * Obtener nota por ID
+     */
+    public function findById(int $id)
+    {
+        return $this->gradeDAO->findById($id);
     }
 }

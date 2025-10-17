@@ -2,26 +2,23 @@
 
 namespace App\Repositories;
 
-use App\Models\User;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
+use App\DAO\Interfaces\UserDAOInterface;
 
 class UserRepository
 {
+    private UserDAOInterface $userDAO;
+
+    public function __construct(UserDAOInterface $userDAO)
+    {
+        $this->userDAO = $userDAO;
+    }
+
     /**
      * Crear un nuevo usuario
      */
     public function create(array $data)
     {
-        // Usar Eloquent para crear el usuario y devolver el objeto completo
-        return User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password' => $data['password'], // Ya viene hasheado desde el controlador
-            'grade' => $data['grade'],
-            'school' => $data['school'],
-            'role' => $data['role'] ?? 'student'
-        ]);
+        return $this->userDAO->create($data);
     }
 
     /**
@@ -29,7 +26,7 @@ class UserRepository
      */
     public function findByEmail(string $email)
     {
-        return User::where('email', $email)->first();
+        return $this->userDAO->findByEmail($email);
     }
 
     /**
@@ -37,7 +34,7 @@ class UserRepository
      */
     public function findById(int $userId)
     {
-        return User::find($userId);
+        return $this->userDAO->findById($userId);
     }
 
     /**
@@ -45,23 +42,38 @@ class UserRepository
      */
     public function update(int $userId, array $data)
     {
-        $user = User::find($userId);
-        
-        if ($user) {
-            $user->update($data);
-            return $user->fresh();
-        }
-        
-        return null;
+        return $this->userDAO->update($userId, $data);
     }
 
     /**
-     * Obtener estadísticas del usuario (usando stored procedure para consultas complejas)
+     * Obtener estadísticas del usuario
      */
     public function getUserStats(int $userId)
     {
-        // Aquí sí usamos stored procedure para consultas complejas
-        $result = DB::select('CALL sp_get_user_stats(?)', [$userId]);
-        return !empty($result) ? $result[0] : null;
+        return $this->userDAO->getUserStats($userId);
+    }
+
+    /**
+     * Verificar si existe usuario
+     */
+    public function exists(int $id)
+    {
+        return $this->userDAO->exists($id);
+    }
+
+    /**
+     * Obtener todos los usuarios
+     */
+    public function getAll()
+    {
+        return $this->userDAO->getAll();
+    }
+
+    /**
+     * Eliminar usuario
+     */
+    public function delete(int $id)
+    {
+        return $this->userDAO->delete($id);
     }
 }

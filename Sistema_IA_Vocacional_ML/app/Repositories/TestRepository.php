@@ -2,54 +2,47 @@
 
 namespace App\Repositories;
 
-use App\Models\VocationalTest;
-use App\Models\TestQuestion;
-use App\Models\TestResponse;
-use App\Models\TestResult;
-use App\Models\AIPrediction;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
+use App\DAO\Interfaces\TestDAOInterface;
 
 class TestRepository
 {
-    
+    private $testDAO;
+
+    public function __construct($testDAO)
+    {
+        $this->testDAO = $testDAO;
+    }
+
     /**
      * Obtener tests activos
      */
     public function getActiveTests()
     {
-        return VocationalTest::where('is_active', true)
-            ->orderBy('created_at', 'desc')
-            ->get();
+        return $this->testDAO->getActiveTests();
     }
 
     /**
      * Obtener test por ID
-     * Devolver objeto en lugar de array
      */
     public function getTestById(int $testId)
     {
-        return VocationalTest::find($testId);
+        return $this->testDAO->findById($testId);
     }
 
     /**
      * Obtener test con preguntas
-     * Devolver objeto en lugar de array
      */
     public function getTestWithQuestions(int $testId)
     {
-        return VocationalTest::with('questions')->find($testId);
+        return $this->testDAO->getTestWithQuestions($testId);
     }
 
     /**
      * Obtener pregunta por número
-     * Devolver objeto en lugar de array
      */
     public function getQuestionByNumber(int $testId, int $questionNumber)
     {
-        return TestQuestion::where('vocational_test_id', $testId)
-            ->where('question_number', $questionNumber)
-            ->first();
+        return $this->testDAO->getQuestionByNumber($testId, $questionNumber);
     }
 
     /**
@@ -57,34 +50,15 @@ class TestRepository
      */
     public function hasUserCompletedTest(int $userId, int $testId)
     {
-        return TestResult::where('user_id', $userId)
-            ->where('vocational_test_id', $testId)
-            ->whereNotNull('completed_at')
-            ->exists();
+        return $this->testDAO->hasUserCompletedTest($userId, $testId);
     }
 
     /**
      * Obtener tests completados por usuario
-     * Devolver array de IDs para compatibilidad con in_array()
      */
     public function getUserCompletedTests(int $userId)
     {
-        return TestResult::where('user_id', $userId)
-            ->whereNotNull('completed_at')
-            ->pluck('vocational_test_id')
-            ->toArray();
-    }
-    
-    /**
-     * Obtener tests completados con detalles
-     */
-    public function getUserCompletedTestsWithDetails(int $userId)
-    {
-        return TestResult::with('test')
-            ->where('user_id', $userId)
-            ->whereNotNull('completed_at')
-            ->orderBy('completed_at', 'desc')
-            ->get();
+        return $this->testDAO->getUserCompletedTests($userId);
     }
 
     /**
@@ -92,18 +66,7 @@ class TestRepository
      */
     public function getUserTestResult(int $userId, int $testId)
     {
-        $result = TestResult::with('test')
-            ->where('user_id', $userId)
-            ->where('vocational_test_id', $testId)
-            ->orderBy('completed_at', 'desc')
-            ->first();
-        
-        if ($result) {
-            $result->scores = json_decode($result->scores, true);
-            $result->recommended_careers = json_decode($result->recommended_careers, true);
-        }
-        
-        return $result;
+        return $this->testDAO->getUserTestResult($userId, $testId);
     }
 
     /**
@@ -111,13 +74,7 @@ class TestRepository
      */
     public function getLastAnsweredQuestion(int $userId, int $testId)
     {
-        $response = TestResponse::join('test_questions', 'test_responses.test_question_id', '=', 'test_questions.id')
-            ->where('test_responses.user_id', $userId)
-            ->where('test_responses.vocational_test_id', $testId)
-            ->orderBy('test_questions.question_number', 'desc')
-            ->first();
-        
-        return $response ? $response->question_number : 0;
+        return $this->testDAO->getLastAnsweredQuestion($userId, $testId);
     }
 
     /**
@@ -125,9 +82,7 @@ class TestRepository
      */
     public function deleteUserResponses(int $userId, int $testId)
     {
-        TestResponse::where('user_id', $userId)
-            ->where('vocational_test_id', $testId)
-            ->delete();
+        return $this->testDAO->deleteUserResponses($userId, $testId);
     }
 
     /**
@@ -135,9 +90,7 @@ class TestRepository
      */
     public function deleteUserResult(int $userId, int $testId)
     {
-        TestResult::where('user_id', $userId)
-            ->where('vocational_test_id', $testId)
-            ->delete();
+        return $this->testDAO->deleteUserResponses($userId, $testId);
     }
 
     /**
@@ -145,10 +98,7 @@ class TestRepository
      */
     public function getUserAnswer(int $userId, int $testId, int $questionId)
     {
-        return TestResponse::where('user_id', $userId)
-            ->where('vocational_test_id', $testId)
-            ->where('test_question_id', $questionId)
-            ->first();
+        return $this->testDAO->getUserAnswer($userId, $testId, $questionId);
     }
 
     /**
@@ -156,9 +106,7 @@ class TestRepository
      */
     public function countUserAnswers(int $userId, int $testId)
     {
-        return TestResponse::where('user_id', $userId)
-            ->where('vocational_test_id', $testId)
-            ->count();
+        return $this->testDAO->countUserAnswers($userId, $testId);
     }
 
     /**
@@ -166,35 +114,15 @@ class TestRepository
      */
     public function saveAnswer(int $userId, int $testId, int $questionId, string $answer, int $score)
     {
-        TestResponse::updateOrCreate(
-            [
-                'user_id' => $userId,
-                'vocational_test_id' => $testId,
-                'test_question_id' => $questionId
-            ],
-            [
-                'answer' => $answer,
-                'score' => $score
-            ]
-        );
+        return $this->testDAO->saveAnswer($userId, $testId, $questionId, $answer, $score);
     }
 
     /**
      * Obtener primera pregunta sin responder
-     * Devolver objeto en lugar de array
      */
     public function getFirstUnansweredQuestion(int $userId, int $testId)
     {
-        return TestQuestion::leftJoin('test_responses', function($join) use ($userId, $testId) {
-                $join->on('test_questions.id', '=', 'test_responses.test_question_id')
-                     ->where('test_responses.user_id', $userId)
-                     ->where('test_responses.vocational_test_id', $testId);
-            })
-            ->where('test_questions.vocational_test_id', $testId)
-            ->whereNull('test_responses.id')
-            ->orderBy('test_questions.question_number')
-            ->select('test_questions.*')
-            ->first();
+        return $this->testDAO->getFirstUnansweredQuestion($userId, $testId);
     }
 
     /**
@@ -202,72 +130,15 @@ class TestRepository
      */
     public function calculateScoresByCategory(int $userId, int $testId)
     {
-        $results = TestResponse::join('test_questions', 'test_responses.test_question_id', '=', 'test_questions.id')
-            ->where('test_responses.user_id', $userId)
-            ->where('test_responses.vocational_test_id', $testId)
-            ->select('test_questions.category', DB::raw('SUM(test_responses.score) as total_score'))
-            ->groupBy('test_questions.category')
-            ->get();
-        
-        $scores = [];
-        foreach ($results as $row) {
-            $scores[$row->category] = (int) $row->total_score;
-        }
-        
-        return $scores;
+        return $this->testDAO->calculateScoresByCategory($userId, $testId);
     }
 
     /**
      * Guardar resultado del test
-     * Devolver objeto en lugar de array
      */
     public function saveResult(int $userId, int $testId, array $scores, array $recommendedCareers, string $analysis, int $totalScore)
     {
-        return TestResult::updateOrCreate(
-            [
-                'user_id' => $userId,
-                'vocational_test_id' => $testId
-            ],
-            [
-                'scores' => json_encode($scores),
-                'recommended_careers' => json_encode($recommendedCareers),
-                'analysis' => $analysis,
-                'total_score' => $totalScore,
-                'completed_at' => now()
-            ]
-        );
-    }
-
-    /**
-     * Guardar predicción de IA
-     */
-    public function savePrediction(int $userId, array $inputData, string $recommendedCareer, float $confidence, array $topCareers, string $modelVersion)
-    {
-        return AIPrediction::create([
-            'user_id' => $userId,
-            'input_data' => json_encode($inputData),
-            'recommended_career' => $recommendedCareer,
-            'confidence' => $confidence,
-            'top_careers' => json_encode($topCareers),
-            'model_version' => $modelVersion
-        ]);
-    }
-
-    /**
-     * Obtener última predicción
-     */
-    public function getLatestPrediction(int $userId)
-    {
-        $prediction = AIPrediction::where('user_id', $userId)
-            ->orderBy('created_at', 'desc')
-            ->first();
-        
-        if ($prediction) {
-            $prediction->input_data = json_decode($prediction->input_data, true);
-            $prediction->top_careers = json_decode($prediction->top_careers, true);
-        }
-        
-        return $prediction;
+        return $this->testDAO->saveResult($userId, $testId, $scores, $recommendedCareers, $analysis, $totalScore);
     }
 
     /**
@@ -275,16 +146,32 @@ class TestRepository
      */
     public function getUserLatestResult(int $userId)
     {
-        $result = TestResult::with('test')
-            ->where('user_id', $userId)
-            ->orderBy('completed_at', 'desc')
-            ->first();
+        return $this->testDAO->getUserTestResult($userId, 1);
+    }
+
+    /**
+     * Obtener tests completados con detalles
+     */
+    public function getUserCompletedTestsWithDetails(int $userId)
+    {
+        $completedTests = $this->testDAO->getUserCompletedTests($userId);
+        $results = [];
         
-        if ($result) {
-            $result->scores = json_decode($result->scores, true);
-            $result->recommended_careers = json_decode($result->recommended_careers, true);
+        foreach ($completedTests as $testId) {
+            $result = $this->testDAO->getUserTestResult($userId, $testId);
+            if ($result) {
+                $results[] = $result;
+            }
         }
         
-        return $result;
+        return $results;
+    }
+    public function savePrediction(int $userId, array $data, string $recommendedCareer, float $confidence, array $topCareers, string $modelVersion)
+    {
+        return $this->testDAO->savePrediction($userId, $data, $recommendedCareer, $confidence, $topCareers, $modelVersion);
+    }
+    public function getLatestPrediction(int $userId)
+    {
+        return $this->testDAO->getLatestPrediction($userId);
     }
 }

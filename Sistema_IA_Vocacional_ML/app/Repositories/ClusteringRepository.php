@@ -2,31 +2,34 @@
 
 namespace App\Repositories;
 
-use App\Models\TestResult;
-use Illuminate\Support\Facades\DB;
+use App\DAO\Interfaces\ClusteringDAOInterface;
 
 class ClusteringRepository
 {
-    
+    private ClusteringDAOInterface $clusteringDAO;
+
+    public function __construct(ClusteringDAOInterface $clusteringDAO)
+    {
+        $this->clusteringDAO = $clusteringDAO;
+    }
+
     /**
      * Obtener datos para clustering
      */
     public function getClusteringData()
     {
-        return TestResult::with(['user', 'test'])
-            ->whereNotNull('completed_at')
-            ->get()
-            ->map(function($result) {
-                return [
-                    'id' => $result->id,
-                    'user_id' => $result->user_id,
-                    'scores' => $result->scores,
-                    'recommended_careers' => $result->recommended_careers,
-                    'total_score' => $result->total_score,
-                    'completed_at' => $result->completed_at
-                ];
-            })
-            ->toArray();
+        $results = $this->clusteringDAO->getAllTestResults();
+        
+        return $results->map(function($result) {
+            return [
+                'id' => $result->id,
+                'user_id' => $result->user_id,
+                'scores' => json_decode($result->scores, true),
+                'recommended_careers' => json_decode($result->recommended_careers, true),
+                'total_score' => $result->total_score,
+                'completed_at' => $result->completed_at
+            ];
+        })->toArray();
     }
 
     /**
@@ -34,19 +37,7 @@ class ClusteringRepository
      */
     public function getAllCompletedTests()
     {
-        return TestResult::whereNotNull('completed_at')
-            ->get()
-            ->map(function($result) {
-                return [
-                    'id' => $result->id,
-                    'user_id' => $result->user_id,
-                    'scores' => $result->scores,
-                    'recommended_careers' => $result->recommended_careers,
-                    'total_score' => $result->total_score,
-                    'completed_at' => $result->completed_at
-                ];
-            })
-            ->toArray();
+        return $this->getClusteringData();
     }
 
     /**
@@ -54,14 +45,15 @@ class ClusteringRepository
      */
     public function getGeneralStatistics()
     {
-        $totalTests = TestResult::whereNotNull('completed_at')->count();
-        $totalUsers = TestResult::whereNotNull('completed_at')->distinct('user_id')->count();
-        $avgScore = TestResult::whereNotNull('completed_at')->avg('total_score');
+        $stats = $this->clusteringDAO->getClusteringStats();
+        
+        $totalTests = $stats['total_clusters'] ?? 0;
+        $totalUsers = $stats['total_users'] ?? 0;
         
         return [
             'total_tests' => $totalTests,
             'total_users' => $totalUsers,
-            'avg_score' => round($avgScore, 2),
+            'avg_score' => 0,
             'completion_rate' => 100
         ];
     }
@@ -71,7 +63,7 @@ class ClusteringRepository
      */
     public function getRiasecDistribution()
     {
-        $results = TestResult::whereNotNull('completed_at')->get();
+        $results = $this->clusteringDAO->getAllTestResults();
         
         $distribution = [
             'realista' => 0,
@@ -83,13 +75,66 @@ class ClusteringRepository
         ];
         
         foreach ($results as $result) {
-            $scores = $result->scores;
-            if ($scores) {
-                $maxCategory = array_keys($scores, max($scores))[0];
-                $distribution[$maxCategory]++;
+            $scores = json_decode($result->scores, true);
+            if ($scores && is_array($scores)) {
+                $maxCategory = array_key_first($scores);
+                if (isset($distribution[$maxCategory])) {
+                    $distribution[$maxCategory]++;
+                }
             }
         }
         
         return $distribution;
+    }
+
+    /**
+     * Guardar cluster
+     */
+    public function saveCluster(int $clusterId, array $userIds, array $clusterData)
+    {
+        return $this->clusteringDAO->saveCluster($clusterId, $userIds, $clusterData);
+    }
+
+    /**
+     * Obtener clusters
+     */
+    public function getClusters()
+    {
+        return $this->clusteringDAO->getClusters();
+    }
+
+    /**
+     * Obtener usuarios en cluster
+     */
+    public function getUsersInCluster(int $clusterId)
+    {
+        return $this->clusteringDAO->getUsersInCluster($clusterId);
+    }
+
+    /**
+     * Eliminar clusters
+     */
+    public function deleteClusters()
+    {
+        return $this->clusteringDAO->deleteClusters();
+    }
+
+    /**
+     * Obtener resultados con filtros
+     */
+    public function getTestResultsWithFilters(array $filters)
+    {
+        $results = $this->clusteringDAO->getTestResultsWithFilters($filters);
+        
+        return $results->map(function($result) {
+            return [
+                'id' => $result->id,
+                'user_id' => $result->user_id,
+                'scores' => json_decode($result->scores, true),
+                'recommended_careers' => json_decode($result->recommended_careers, true),
+                'total_score' => $result->total_score,
+                'completed_at' => $result->completed_at
+            ];
+        })->toArray();
     }
 }

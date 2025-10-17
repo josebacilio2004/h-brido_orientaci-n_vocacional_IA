@@ -2,18 +2,23 @@
 
 namespace App\Repositories;
 
-use App\Models\Career;
-use Illuminate\Support\Facades\DB;
+use App\DAO\Interfaces\CareerDAOInterface;
 
 class CareerRepository
 {
-    
+    private CareerDAOInterface $careerDAO;
+
+    public function __construct(CareerDAOInterface $careerDAO)
+    {
+        $this->careerDAO = $careerDAO;
+    }
+
     /**
      * Obtener todas las carreras
      */
     public function getAll()
     {
-        return Career::orderBy('faculty')->orderBy('name')->get();
+        return $this->careerDAO->getAll();
     }
 
     /**
@@ -29,11 +34,17 @@ class CareerRepository
      */
     public function getAllFaculties()
     {
-        return Career::select('faculty')
-            ->distinct()
-            ->orderBy('faculty')
-            ->pluck('faculty')
-            ->toArray();
+        $careers = $this->getAll();
+        $faculties = [];
+        
+        foreach ($careers as $career) {
+            if (!in_array($career->faculty, $faculties)) {
+                $faculties[] = $career->faculty;
+            }
+        }
+        
+        sort($faculties);
+        return $faculties;
     }
 
     /**
@@ -41,9 +52,7 @@ class CareerRepository
      */
     public function getByFaculty(string $faculty)
     {
-        return Career::where('faculty', $faculty)
-            ->orderBy('name')
-            ->get();
+        return $this->careerDAO->getByFaculty($faculty);
     }
 
     /**
@@ -51,9 +60,7 @@ class CareerRepository
      */
     public function getByRiasecProfile(string $profile)
     {
-        return Career::where('riasec_profile', 'LIKE', '%' . $profile . '%')
-            ->orderBy('name')
-            ->get();
+        return $this->careerDAO->getByRiasecProfile($profile);
     }
 
     /**
@@ -61,11 +68,7 @@ class CareerRepository
      */
     public function search(string $searchTerm)
     {
-        return Career::where('name', 'LIKE', '%' . $searchTerm . '%')
-            ->orWhere('description', 'LIKE', '%' . $searchTerm . '%')
-            ->orWhere('faculty', 'LIKE', '%' . $searchTerm . '%')
-            ->orderBy('name')
-            ->get();
+        return $this->careerDAO->search($searchTerm);
     }
 
     /**
@@ -73,7 +76,7 @@ class CareerRepository
      */
     public function findById(int $careerId)
     {
-        return Career::find($careerId);
+        return $this->careerDAO->findById($careerId);
     }
 
     /**
@@ -81,12 +84,45 @@ class CareerRepository
      */
     public function getRecommendedByCategories(array $categories)
     {
-        $query = Career::query();
+        $careers = collect();
         
         foreach ($categories as $category) {
-            $query->orWhere('riasec_profile', 'LIKE', '%' . $category . '%');
+            $careersByCategory = $this->careerDAO->getByRiasecProfile($category);
+            $careers = $careers->merge($careersByCategory);
         }
         
-        return $query->orderBy('name')->get();
+        return $careers->unique('id');
+    }
+
+    /**
+     * Obtener carreras recomendadas
+     */
+    public function getRecommendedCareers(array $scores)
+    {
+        return $this->careerDAO->getRecommendedCareers($scores);
+    }
+
+    /**
+     * Crear carrera
+     */
+    public function create(array $data)
+    {
+        return $this->careerDAO->create($data);
+    }
+
+    /**
+     * Actualizar carrera
+     */
+    public function update(int $id, array $data)
+    {
+        return $this->careerDAO->update($id, $data);
+    }
+
+    /**
+     * Eliminar carrera
+     */
+    public function delete(int $id)
+    {
+        return $this->careerDAO->delete($id);
     }
 }
