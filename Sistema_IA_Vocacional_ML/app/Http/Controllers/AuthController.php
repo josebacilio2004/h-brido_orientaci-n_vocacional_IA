@@ -6,6 +6,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Repositories\UserRepository;
+use App\Models\User;
+use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
@@ -53,17 +55,21 @@ class AuthController extends Controller
             'school' => 'required|string|max:255',
         ]);
 
-        $user = $this->userRepository->create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'grade' => $request->grade,
-            'school' => $request->school,
-        ]);
+        try {
+            $user = User::crear([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => Hash::make($request->password),
+                'grade' => $request->grade,
+                'school' => $request->school,
+            ]);
 
-        Auth::login($user);
-
-        return redirect('/dashboard');
+            Auth::login($user);
+            return redirect('/dashboard');
+        } catch (\Exception $e) {
+            Log::error('Error en registro: ' . $e->getMessage());
+            return back()->with('error', 'Error al registrarse. Por favor intenta de nuevo.');
+        }
     }
 
     public function logout(Request $request)

@@ -2,68 +2,115 @@
 
 namespace App\Http\Controllers;
 
-use App\Repositories\TestRepository;
-use App\Repositories\GradeRepository;
+use App\Models\VocationalTest;
+use App\Models\TestResponse;
+use App\Models\TestResult;
+use App\Models\StudentGrade;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Routing\Controller as BaseController;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
+use Illuminate\Foundation\Validation\ValidatesRequests;
 
 class TestController extends BaseController
 {
-    protected $testRepository;
-    protected $gradeRepository;
-
-    public function __construct(TestRepository $testRepository, GradeRepository $gradeRepository)
+    public function __construct()
     {
         $this->middleware('auth');
-        $this->testRepository = $testRepository;
-        $this->gradeRepository = $gradeRepository;
     }
 
     public function index()
     {
-        $tests = $this->testRepository->getActiveTests();
-        $completedTests = $this->testRepository->getUserCompletedTests(Auth::id());
+        try {
+            $tests = VocationalTest::obtenerActivos();
+            $completedTests = VocationalTest::obtenerTestsCompletados(Auth::id());
 
-        return view('tests.index', compact('tests', 'completedTests'));
+            return view('tests.index', compact('tests', 'completedTests'));
+        } catch (\Exception $e) {
+            Log::error('Error en index: ' . $e->getMessage());
+            return redirect()->route('dashboard')->with('error', 'Error al cargar los tests.');
+        }
     }
 
     public function show($id)
     {
-        $test = $this->testRepository->getTestWithQuestions($id);
+        try {
+            $testData = VocationalTest::obtenerConPreguntas($id);
 
-        if (!$test) {
-            abort(404, 'Test no encontrado');
+            if (!$testData || empty($testData['test'])) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $test = $testData['test'];
+            $hasCompleted = VocationalTest::verificarTestCompletado(Auth::id(), $id);
+
+            if ($hasCompleted) {
+                return redirect()->route('tests.result', $id)
+                    ->with('info', 'Ya has completado este test. Aquí están tus resultados.');
+            }
+
+            return view('tests.show', compact('test'));
+        } catch (\Exception $e) {
+            Log::error('Error en show: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar el test.');
         }
-
-        $hasCompleted = $this->testRepository->hasUserCompletedTest(Auth::id(), $id);
-
-        if ($hasCompleted) {
-            return redirect()->route('tests.result', $id)
-                ->with('info', 'Ya has completado este test. Aquí están tus resultados.');
-        }
-
-        return view('tests.show', compact('test'));
     }
 
     public function result($id)
     {
-        $result = $this->testRepository->getUserTestResult(Auth::id(), $id);
+        try {
+            $test = VocationalTest::find($id);
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
 
-        if (!$result) {
-            return redirect()->route('tests.index')
-                ->with('error', 'No se encontró el resultado del test.');
+            $resultData = TestResult::obtenerResultado(Auth::id(), $id);
+
+            if (!$resultData) {
+                Log::warning("No hay resultados para user: " . Auth::id() . ", test: " . $id);
+                return redirect()->route('tests.index')
+                    ->with('error', 'Aún no has completado este test. Por favor complétalo primero.');
+            }
+
+            $result = new \stdClass();
+            $result->vocational_test_id = $resultData->vocational_test_id ?? $id;
+            $result->user_id = $resultData->user_id ?? Auth::id();
+            $result->analysis = $resultData->analysis ?? 'No hay análisis disponible';
+            $result->total_score = $resultData->total_score ?? 0;
+
+            if (is_string($resultData->scores)) {
+                $result->scores = json_decode($resultData->scores, true) ?? [];
+            } else {
+                $result->scores = (array)$resultData->scores ?? [];
+            }
+
+            if (is_string($resultData->recommended_careers)) {
+                $result->recommended_careers = json_decode($resultData->recommended_careers, true) ?? [];
+            } else {
+                $result->recommended_careers = (array)$resultData->recommended_careers ?? [];
+            }
+
+            Log::info("Resultado cargado correctamente para resultado");
+
+            return view('tests.result', compact('result'));
+        } catch (\Exception $e) {
+            Log::error('Error en result: ' . $e->getMessage());
+            Log::error($e->getTraceAsString());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar resultados: ' . $e->getMessage());
         }
-
-        return view('tests.result', compact('result'));
     }
 
     public function gradesForm()
     {
-        $grades = $this->gradeRepository->getUserGrades(Auth::id());
-        return view('tests.grades', compact('grades'));
+        try {
+            $grades = StudentGrade::obtenerNotas(Auth::id());
+            return view('tests.grades', compact('grades'));
+        } catch (\Exception $e) {
+            Log::error('Error en gradesForm: ' . $e->getMessage());
+            return view('tests.grades', ['grades' => null]);
+        }
     }
 
     public function submitGrades(Request $request)
@@ -80,127 +127,118 @@ class TestController extends BaseController
             'nota_educacion_trabajo' => 'required|integer|min:0|max:20',
         ]);
 
-        $grades = $this->gradeRepository->saveOrUpdateGrades(
-            Auth::id(),
-            array_merge($validated, ['academic_year' => date('Y')])
-        );
-
         try {
-            $prediction = $this->getPredictionFromAI($grades);
-
-            return redirect()->route('tests.ai-result')
-                ->with('success', 'Predicción generada exitosamente')
-                ->with('prediction', $prediction);
-        } catch (\Exception $e) {
-            return back()->with('error', 'Error al obtener predicción: ' . $e->getMessage());
-        }
-    }
-
-    private function getPredictionFromAI($grades)
-    {
-        $apiUrl = env('ML_API_URL', 'http://localhost:8000/predict');
-
-        $data = [
-            'Nota_Matematica' => $grades['nota_matematica'],
-            'Nota_Comunicacion' => $grades['nota_comunicacion'],
-            'Nota_Ciencias_Sociales' => $grades['nota_ciencias_sociales'],
-            'Nota_Ciencia_Tecnologia' => $grades['nota_ciencia_tecnologia'],
-            'Nota_Desarrollo_Personal' => $grades['nota_desarrollo_personal'],
-            'Nota_Ciudadania_Civica' => $grades['nota_ciudadania_civica'],
-            'Nota_Educacion_Fisica' => $grades['nota_educacion_fisica'],
-            'Nota_Ingles' => $grades['nota_ingles'],
-            'Nota_Educacion_Trabajo' => $grades['nota_educacion_trabajo'],
-        ];
-
-        $response = Http::timeout(10)->post($apiUrl, $data);
-
-        if ($response->successful()) {
-            $result = $response->json();
-
-            $this->testRepository->savePrediction(
+            StudentGrade::guardarNotas(
                 Auth::id(),
-                $data,
-                $result['carrera_recomendada'] ?? 'No definida',
-                $result['confidence'] ?? 0,
-                $result['top_careers'] ?? [],
-                $result['model_version'] ?? '1.0'
+                $validated['nota_matematica'],
+                $validated['nota_comunicacion'],
+                $validated['nota_ciencias_sociales'],
+                $validated['nota_ciencia_tecnologia'],
+                $validated['nota_desarrollo_personal'],
+                $validated['nota_ciudadania_civica'],
+                $validated['nota_educacion_fisica'],
+                $validated['nota_ingles'],
+                $validated['nota_educacion_trabajo'],
+                date('Y')
             );
 
-            return $result;
+            try {
+                $prediction = $this->getPredictionFromAI($validated);
+                return redirect()->route('tests.ai-result')
+                    ->with('success', 'Predicción generada exitosamente')
+                    ->with('prediction', $prediction);
+            } catch (\Exception $e) {
+                Log::warning('AI prediction failed, showing grades saved message: ' . $e->getMessage());
+                return redirect()->route('tests.ai-result')
+                    ->with('success', 'Notas guardadas. No pudimos conectar con el servicio de IA.');
+            }
+        } catch (\Exception $e) {
+            Log::error('Error en submitGrades: ' . $e->getMessage());
+            return back()->with('error', 'Error al guardar las notas: ' . $e->getMessage());
         }
-
-        throw new \Exception('Error al conectar con el servicio de IA');
-    }
-
-    public function aiResult()
-    {
-        $prediction = $this->testRepository->getLatestPrediction(Auth::id());
-
-        if (!$prediction) {
-            return redirect()->route('tests.grades')
-                ->with('info', 'Primero debes ingresar tus notas académicas.');
-        }
-
-        return view('tests.ai-result', compact('prediction'));
     }
 
     public function start($id)
     {
-        $test = $this->testRepository->getTestById($id);
+        try {
+            $test = VocationalTest::find($id);
 
-        if (!$test) {
-            abort(404, 'Test no encontrado');
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $hasCompleted = VocationalTest::verificarTestCompletado(Auth::id(), $id);
+
+            if ($hasCompleted) {
+                return redirect()->route('tests.result', $id)
+                    ->with('info', 'Ya has completado este test.');
+            }
+
+            return redirect()->route('tests.question', [
+                'id' => $id,
+                'question' => 1
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error en start: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al iniciar el test.');
         }
-
-        $hasCompleted = $this->testRepository->hasUserCompletedTest(Auth::id(), $id);
-
-        if ($hasCompleted) {
-            return redirect()->route('tests.result', $id)
-                ->with('info', 'Ya has completado este test.');
-        }
-
-        $lastQuestionNumber = $this->testRepository->getLastAnsweredQuestion(Auth::id(), $id);
-        $nextQuestion = $lastQuestionNumber ? min($lastQuestionNumber + 1, $test->total_questions) : 1;
-
-        return redirect()->route('tests.question', [
-            'id' => $id,
-            'question' => $nextQuestion
-        ]);
     }
 
     public function restart($id)
     {
-        $this->testRepository->deleteUserResponses(Auth::id(), $id);
-        $this->testRepository->deleteUserResult(Auth::id(), $id);
+        try {
+            $test = VocationalTest::find($id);
 
-        return redirect()->route('tests.start', $id)
-            ->with('success', 'Test reiniciado correctamente.');
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            TestResponse::where('user_id', Auth::id())
+                ->where('vocational_test_id', $id)
+                ->delete();
+
+            TestResult::where('user_id', Auth::id())
+                ->where('vocational_test_id', $id)
+                ->delete();
+
+            return redirect()->route('tests.start', $id)
+                ->with('success', 'Test reiniciado correctamente.');
+        } catch (\Exception $e) {
+            Log::error('Error en restart: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al reiniciar el test.');
+        }
     }
 
     public function question($id, $questionNumber)
     {
-        $test = $this->testRepository->getTestWithQuestions($id);
+        try {
+            $testData = VocationalTest::obtenerConPreguntas($id);
 
-        if (!$test) {
-            abort(404, 'Test no encontrado');
+            if (!$testData || empty($testData['test'])) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $test = $testData['test'];
+
+            if ($questionNumber < 1 || $questionNumber > $test->total_questions) {
+                return redirect()->route('tests.start', $id);
+            }
+
+            $question = VocationalTest::obtenerPregunta($id, $questionNumber);
+
+            if (!$question) {
+                abort(404, 'Pregunta no encontrada');
+            }
+
+            $previousAnswer = TestResponse::obtenerRespuestaPrevia(Auth::id(), $id, $question->id);
+            $progress = ($questionNumber / $test->total_questions) * 100;
+            $answeredCount = VocationalTest::contarRespuestasUsuario(Auth::id(), $id);
+
+            return view('tests.question', compact('test', 'question', 'questionNumber', 'progress', 'answeredCount', 'previousAnswer'));
+        } catch (\Exception $e) {
+            Log::error('Error en question: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar la pregunta.');
         }
-
-        if ($questionNumber < 1 || $questionNumber > $test->total_questions) {
-            return redirect()->route('tests.start', $id);
-        }
-
-        $question = $this->testRepository->getQuestionByNumber($id, $questionNumber);
-
-        if (!$question) {
-            abort(404, 'Pregunta no encontrada');
-        }
-
-        $previousAnswer = $this->testRepository->getUserAnswer(Auth::id(), $id, $question->id);
-
-        $progress = ($questionNumber / $test->total_questions) * 100;
-        $answeredCount = $this->testRepository->countUserAnswers(Auth::id(), $id);
-
-        return view('tests.question', compact('test', 'question', 'questionNumber', 'progress', 'answeredCount', 'previousAnswer'));
     }
 
     public function saveAnswer(Request $request, $id, $questionNumber)
@@ -213,8 +251,8 @@ class TestController extends BaseController
                 'answer' => 'required'
             ]);
 
-            $test = $this->testRepository->getTestById($id);
-            $question = $this->testRepository->getQuestionByNumber($id, $questionNumber);
+            $test = VocationalTest::find($id);
+            $question = VocationalTest::obtenerPregunta($id, $questionNumber);
 
             if (!$test || !$question) {
                 throw new \Exception('Test o pregunta no encontrada');
@@ -222,7 +260,7 @@ class TestController extends BaseController
 
             $score = $this->calculateScore($question, $validated['answer']);
 
-            $this->testRepository->saveAnswer(
+            TestResponse::guardarRespuesta(
                 Auth::id(),
                 $id,
                 $question->id,
@@ -246,53 +284,56 @@ class TestController extends BaseController
             return back()->with('error', 'Error al guardar respuesta. Por favor intenta de nuevo.');
         }
     }
-    
+
     private function processTest($id)
     {
         Log::info("=== PROCESANDO TEST ===");
 
         try {
-            $test = $this->testRepository->getTestById($id);
+            $test = VocationalTest::find($id);
             $user = Auth::user();
 
-            $totalResponses = $this->testRepository->countUserAnswers($user->id, $id);
+            if (!$test || !$user) {
+                throw new \Exception("Test o usuario no encontrado");
+            }
 
+            $totalResponses = VocationalTest::contarRespuestasUsuario($user->id, $id);
             Log::info("Respuestas encontradas: {$totalResponses}/{$test->total_questions}");
 
             if ($totalResponses < $test->total_questions) {
-                Log::warning("Faltan respuestas");
-
-                $firstUnanswered = $this->testRepository->getFirstUnansweredQuestion($user->id, $id);
-
-                if ($firstUnanswered) {
-                    return redirect()->route('tests.question', [
-                        'id' => $id,
-                        'question' => $firstUnanswered->question_number
-                    ])->with('warning', 'Por favor completa todas las preguntas.');
-                }
+                throw new \Exception("No todas las preguntas han sido respondidas");
             }
 
-            $scores = $this->testRepository->calculateScoresByCategory($user->id, $id);
-
-            Log::info("Puntajes calculados:", $scores);
+            $scores = VocationalTest::calcularPuntajesCategorias($user->id, $id);
+            Log::info("Puntajes calculados:", (array)$scores);
 
             if (empty($scores)) {
                 throw new \Exception("No se pudieron calcular los puntajes");
             }
 
-            $recommendedCareers = $this->getRecommendedCareersRIASEC($scores);
-            $analysis = $this->generateRIASECAnalysis($scores, $recommendedCareers);
+            $scoresArray = [];
+            foreach ($scores as $score) {
+                $scoresArray[$score->category] = $score->total_score;
+            }
 
-            $result = $this->testRepository->saveResult(
+            $recommendedCareers = $this->getRecommendedCareersRIASEC($scoresArray);
+            $analysis = $this->generateRIASECAnalysis($scoresArray, $recommendedCareers);
+
+            // VERIFICAR QUE SE GUARDE CORRECTAMENTE
+            $result = TestResult::guardarResultado(
                 $user->id,
                 $id,
-                $scores,
+                $scoresArray,
                 $recommendedCareers,
                 $analysis,
-                array_sum($scores)
+                array_sum($scoresArray)
             );
 
-            Log::info("Resultado guardado ID: {$result->id}");
+            if (!$result) {
+                throw new \Exception("No se pudo guardar el resultado en la base de datos");
+            }
+
+            Log::info("Resultado guardado exitosamente - ID: " . ($result->id ?? 'N/A'));
 
             return redirect()->route('tests.result', $id)
                 ->with('success', '¡Test completado exitosamente!');
@@ -303,75 +344,46 @@ class TestController extends BaseController
             return redirect()->route('tests.question', [
                 'id' => $id,
                 'question' => 1
-            ])->with('error', 'Error al procesar el test. Por favor intenta de nuevo.');
+            ])->with('error', 'Error al procesar el test: ' . $e->getMessage());
         }
     }
 
-    public function process($id)
+    public function aiResult()
     {
-        return $this->processTest($id);
-    }
-
-    public function finalizeFromLastQuestion(Request $request, $id)
-    {
-        Log::info("=== FINALIZAR DESDE ÚLTIMA PREGUNTA ===");
-        Log::info("Test ID: {$id}, Usuario: " . Auth::id());
-
         try {
-            $test = $this->testRepository->getTestById($id);
-            $lastQuestionNumber = $test->total_questions;
+            $prediction = session('prediction');
+            $grades = StudentGrade::obtenerNotas(Auth::id());
 
-            Log::info("Buscando última pregunta: número {$lastQuestionNumber}");
-
-            $question = $this->testRepository->getQuestionByNumber($id, $lastQuestionNumber);
-
-            if (!$question) {
-                throw new \Exception('Última pregunta no encontrada');
+            if (!$grades) {
+                return redirect()->route('tests.grades')
+                    ->with('error', 'Por favor completa primero el formulario de notas.');
             }
 
-            Log::info("Última pregunta encontrada: ID {$question->id}");
-
-            $validated = $request->validate([
-                'answer' => 'required'
-            ]);
-
-            $score = $this->calculateScore($question, $validated['answer']);
-
-            Log::info("Guardando respuesta: {$validated['answer']}, score: {$score}");
-
-            $this->testRepository->saveAnswer(
-                Auth::id(),
-                $id,
-                $question->id,
-                $validated['answer'],
-                $score
-            );
-
-            Log::info("Última respuesta guardada exitosamente");
-
-            return $this->processTest($id);
+            return view('tests.ai-result', compact('prediction', 'grades'));
         } catch (\Exception $e) {
-            Log::error("Error al finalizar desde última pregunta: " . $e->getMessage());
-            Log::error($e->getTraceAsString());
-
-            return redirect()->route('tests.question', [
-                'id' => $id,
-                'question' => $lastQuestionNumber ?? 1
-            ])->with('error', 'Error al finalizar el test: ' . $e->getMessage());
+            Log::error('Error en aiResult: ' . $e->getMessage());
+            return redirect()->route('tests.grades')->with('error', 'Error al cargar resultados de IA.');
         }
     }
 
     private function calculateScore($question, $answer)
     {
-        switch ($question->type) {
-            case 'scale':
-                return (int) $answer;
-            case 'yes_no':
-                return $answer === 'yes' ? 5 : 0;
-            case 'multiple_choice':
-                return 3;
-            default:
-                return 0;
+        try {
+            $type = $question->type ?? 'scale';
+
+            switch ($type) {
+                case 'scale':
+                    return (int) $answer;
+                case 'yes_no':
+                    return $answer === 'yes' ? 5 : 0;
+                case 'multiple_choice':
+                    return 3;
+                default:
+                    return 0;
+            }
+        } catch (\Exception $e) {
+            Log::warning('Error calculating score: ' . $e->getMessage());
+            return 0;
         }
     }
 
@@ -453,8 +465,8 @@ class TestController extends BaseController
             $recommendations[] = [
                 'category' => $category,
                 'category_name' => $this->getCategoryName($category),
-                'score' => $scores[$category],
-                'percentage' => round(($scores[$category] / 50) * 100, 1),
+                'score' => $scores[$category] ?? 0,
+                'percentage' => round((($scores[$category] ?? 0) / 50) * 100, 1),
                 'careers' => $careerMap[$category] ?? [],
                 'description' => $this->getCategoryDescription($category)
             ];
@@ -495,7 +507,7 @@ class TestController extends BaseController
     {
         arsort($scores);
         $topCategory = array_key_first($scores);
-        $topScore = $scores[$topCategory];
+        $topScore = $scores[$topCategory] ?? 0;
         $topPercentage = round(($topScore / 50) * 100, 1);
 
         $categoryName = $this->getCategoryName($topCategory);
@@ -504,12 +516,39 @@ class TestController extends BaseController
         $analysis .= $this->getCategoryDescription($topCategory) . " ";
 
         if (count($scores) >= 2) {
-            $secondCategory = array_keys($scores)[1];
-            $secondCategoryName = $this->getCategoryName($secondCategory);
-            $analysis .= "También muestras características del tipo <strong>{$secondCategoryName}</strong>, ";
-            $analysis .= "lo que indica un perfil versátil que puede adaptarse a diferentes áreas profesionales.";
+            $secondCategory = array_keys($scores)[1] ?? null;
+            if ($secondCategory) {
+                $secondCategoryName = $this->getCategoryName($secondCategory);
+                $analysis .= "También muestras características del tipo <strong>{$secondCategoryName}</strong>, ";
+                $analysis .= "lo que indica un perfil versátil que puede adaptarse a diferentes áreas profesionales.";
+            }
         }
 
         return $analysis;
+    }
+
+    private function getPredictionFromAI($grades)
+    {
+        $apiUrl = env('ML_API_URL', 'http://localhost:8000/predict');
+
+        $data = [
+            'Nota_Matematica' => $grades['nota_matematica'],
+            'Nota_Comunicacion' => $grades['nota_comunicacion'],
+            'Nota_Ciencias_Sociales' => $grades['nota_ciencias_sociales'],
+            'Nota_Ciencia_Tecnologia' => $grades['nota_ciencia_tecnologia'],
+            'Nota_Desarrollo_Personal' => $grades['nota_desarrollo_personal'],
+            'Nota_Ciudadania_Civica' => $grades['nota_ciudadania_civica'],
+            'Nota_Educacion_Fisica' => $grades['nota_educacion_fisica'],
+            'Nota_Ingles' => $grades['nota_ingles'],
+            'Nota_Educacion_Trabajo' => $grades['nota_educacion_trabajo'],
+        ];
+
+        $response = Http::timeout(10)->post($apiUrl, $data);
+
+        if ($response->successful()) {
+            return $response->json();
+        }
+
+        throw new \Exception('Error al conectar con el servicio de IA');
     }
 }

@@ -2,39 +2,46 @@
 
 namespace App\Http\Controllers;
 
-use App\Repositories\ClusteringRepository;
+use App\Models\TestResult;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
-class ClusteringController extends Controller
+class ClusteringController extends \Illuminate\Routing\Controller
 {
-    protected $clusteringRepository;
-
-    public function __construct(ClusteringRepository $clusteringRepository)
+    public function __construct()
     {
-        $this->clusteringRepository = $clusteringRepository;
+        $this->middleware('auth');
+        $this->middleware('admin')->only('dashboard', 'getClusteringData');
     }
 
     public function dashboard()
     {
-        $results = $this->clusteringRepository->getAllCompletedTests();
+        try {
+            $results = TestResult::obtenerTodosLosResultados();
 
-        if (count($results) < 10) {
-            return view('clustering.dashboard')->with('error', 'Se necesitan al menos 10 tests completados para realizar el análisis de clustering.');
+            if (count($results) < 10) {
+                return view('clustering.dashboard')
+                    ->with('error', 'Se necesitan al menos 10 tests completados para realizar el análisis de clustering.');
+            }
+
+            // Preparar datos para clustering
+            $data = $this->prepareDataForClustering($results);
+
+            // Aplicar K-Means clustering
+            $clusters = $this->kMeansClustering($data, 6);
+
+            // Calcular estadísticas por cluster
+            $clusterStats = $this->calculateClusterStatistics($clusters, $results);
+
+            // Obtener tendencias y patrones
+            $trends = $this->analyzeTrends($results);
+
+            return view('clustering.dashboard', compact('clusterStats', 'trends', 'results'));
+        } catch (\Exception $e) {
+            Log::error('Error en clustering dashboard: ' . $e->getMessage());
+            return view('clustering.dashboard')
+                ->with('error', 'Error al procesar clustering: ' . $e->getMessage());
         }
-
-        // Preparar datos para clustering
-        $data = $this->prepareDataForClustering($results);
-
-        // Aplicar K-Means clustering
-        $clusters = $this->kMeansClustering($data, 6);
-
-        // Calcular estadísticas por cluster
-        $clusterStats = $this->calculateClusterStatistics($clusters, $results);
-
-        // Obtener tendencias y patrones
-        $trends = $this->analyzeTrends($results);
-
-        return view('clustering.dashboard', compact('clusterStats', 'trends', 'results'));
     }
 
     private function prepareDataForClustering($results)
@@ -42,20 +49,29 @@ class ClusteringController extends Controller
         $data = [];
 
         foreach ($results as $result) {
-            $scores = is_string($result['scores']) ? json_decode($result['scores'], true) : $result['scores'];
-            
-            // Normalizar puntajes (0-1)
-            $normalized = [];
-            foreach (['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'] as $category) {
-                $normalized[] = isset($scores[$category]) ? $scores[$category] / 50 : 0;
-            }
+            try {
+                $scores = is_string($result->scores) ? json_decode($result->scores, true) : $result->scores;
+                
+                if (!is_array($scores)) {
+                    $scores = [];
+                }
+                
+                // Normalizar puntajes (0-1)
+                $normalized = [];
+                foreach (['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'] as $category) {
+                    $normalized[] = isset($scores[$category]) ? $scores[$category] / 50 : 0;
+                }
 
-            $data[] = [
-                'id' => $result['id'],
-                'user_id' => $result['user_id'],
-                'features' => $normalized,
-                'scores' => $scores
-            ];
+                $data[] = [
+                    'id' => $result->id,
+                    'user_id' => $result->user_id,
+                    'features' => $normalized,
+                    'scores' => $scores
+                ];
+            } catch (\Exception $e) {
+                Log::warning('Error preparando datos para clustering: ' . $e->getMessage());
+                continue;
+            }
         }
 
         return $data;
@@ -64,6 +80,10 @@ class ClusteringController extends Controller
     private function kMeansClustering($data, $k = 6, $maxIterations = 100)
     {
         $n = count($data);
+        if ($n === 0) {
+            return ['clusters' => [], 'centroids' => [], 'assignments' => []];
+        }
+
         $dimensions = count($data[0]['features']);
 
         // Inicializar centroides aleatoriamente
@@ -102,7 +122,6 @@ class ClusteringController extends Controller
                 }
             }
 
-            // Si no hubo cambios, convergió
             if (!$changed) {
                 break;
             }
@@ -164,51 +183,52 @@ class ClusteringController extends Controller
                 continue;
             }
 
-            // Calcular perfil dominante del cluster
-            $centroid = $centroids[$clusterIndex];
-            $maxValue = max($centroid);
-            $dominantIndex = array_search($maxValue, $centroid);
-            $dominantProfile = $categories[$dominantIndex];
+            try {
+                $centroid = $centroids[$clusterIndex];
+                $maxValue = max($centroid);
+                $dominantIndex = array_search($maxValue, $centroid);
+                $dominantProfile = $categories[$dominantIndex] ?? 'desconocido';
 
-            // Calcular carreras más comunes en este cluster
-            $careers = [];
-            foreach ($clusterData as $point) {
-                $result = collect($results)->firstWhere('id', $point['id']);
-                if ($result) {
-                    $recommendedCareers = is_string($result['recommended_careers']) 
-                        ? json_decode($result['recommended_careers'], true) 
-                        : $result['recommended_careers'];
-                    
-                    if (isset($recommendedCareers[0]['careers'])) {
-                        foreach ($recommendedCareers[0]['careers'] as $career) {
-                            $careers[] = $career;
+                $careers = [];
+                foreach ($clusterData as $point) {
+                    $result = collect($results)->firstWhere('id', $point['id']);
+                    if ($result) {
+                        $recommendedCareers = is_string($result->recommended_careers) 
+                            ? json_decode($result->recommended_careers, true) 
+                            : $result->recommended_careers;
+                        
+                        if (isset($recommendedCareers[0]['careers']) && is_array($recommendedCareers[0]['careers'])) {
+                            foreach ($recommendedCareers[0]['careers'] as $career) {
+                                $careers[] = $career;
+                            }
                         }
                     }
                 }
+
+                $careerCounts = array_count_values($careers);
+                arsort($careerCounts);
+                $topCareers = array_slice(array_keys($careerCounts), 0, 5);
+
+                $avgScores = [];
+                foreach ($categories as $i => $category) {
+                    $avgScores[$category] = round($centroid[$i] * 50, 1);
+                }
+
+                $stats[] = [
+                    'cluster_id' => $clusterIndex,
+                    'size' => count($clusterData),
+                    'percentage' => round((count($clusterData) / count($results)) * 100, 1),
+                    'dominant_profile' => $dominantProfile,
+                    'avg_scores' => $avgScores,
+                    'top_careers' => $topCareers,
+                    'centroid' => $centroid
+                ];
+            } catch (\Exception $e) {
+                Log::warning('Error calculando estadísticas del cluster: ' . $e->getMessage());
+                continue;
             }
-
-            $careerCounts = array_count_values($careers);
-            arsort($careerCounts);
-            $topCareers = array_slice(array_keys($careerCounts), 0, 5);
-
-            // Calcular promedios de puntajes
-            $avgScores = [];
-            foreach ($categories as $i => $category) {
-                $avgScores[$category] = round($centroid[$i] * 50, 1);
-            }
-
-            $stats[] = [
-                'cluster_id' => $clusterIndex,
-                'size' => count($clusterData),
-                'percentage' => round((count($clusterData) / count($results)) * 100, 1),
-                'dominant_profile' => $dominantProfile,
-                'avg_scores' => $avgScores,
-                'top_careers' => $topCareers,
-                'centroid' => $centroid
-            ];
         }
 
-        // Ordenar por tamaño de cluster
         usort($stats, function($a, $b) {
             return $b['size'] - $a['size'];
         });
@@ -218,63 +238,77 @@ class ClusteringController extends Controller
 
     private function analyzeTrends($results)
     {
-        $categories = ['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'];
-        
-        // Calcular promedios generales
-        $avgScores = [];
-        foreach ($categories as $category) {
-            $scores = collect($results)->map(function($result) use ($category) {
-                $scores = is_string($result['scores']) ? json_decode($result['scores'], true) : $result['scores'];
-                return $scores[$category] ?? 0;
-            });
-            $avgScores[$category] = round($scores->avg(), 1);
-        }
-
-        // Encontrar categoría más popular
-        arsort($avgScores);
-        $mostPopular = array_key_first($avgScores);
-
-        // Carreras más recomendadas
-        $allCareers = [];
-        foreach ($results as $result) {
-            $recommendedCareers = is_string($result['recommended_careers']) 
-                ? json_decode($result['recommended_careers'], true) 
-                : $result['recommended_careers'];
+        try {
+            $categories = ['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'];
             
-            if (isset($recommendedCareers[0]['careers'])) {
-                foreach ($recommendedCareers[0]['careers'] as $career) {
-                    $allCareers[] = $career;
+            $avgScores = [];
+            foreach ($categories as $category) {
+                $scores = collect($results)->map(function($result) use ($category) {
+                    $scores = is_string($result->scores) ? json_decode($result->scores, true) : $result->scores;
+                    return $scores[$category] ?? 0;
+                });
+                $avgScores[$category] = round($scores->avg(), 1);
+            }
+
+            arsort($avgScores);
+            $mostPopular = array_key_first($avgScores) ?? 'realista';
+
+            $allCareers = [];
+            foreach ($results as $result) {
+                $recommendedCareers = is_string($result->recommended_careers) 
+                    ? json_decode($result->recommended_careers, true) 
+                    : $result->recommended_careers;
+                
+                if (isset($recommendedCareers[0]['careers']) && is_array($recommendedCareers[0]['careers'])) {
+                    foreach ($recommendedCareers[0]['careers'] as $career) {
+                        $allCareers[] = $career;
+                    }
                 }
             }
-        }
-        $careerCounts = array_count_values($allCareers);
-        arsort($careerCounts);
-        $topCareers = array_slice($careerCounts, 0, 10, true);
+            
+            $careerCounts = array_count_values($allCareers);
+            arsort($careerCounts);
+            $topCareers = array_slice($careerCounts, 0, 10, true);
 
-        return [
-            'total_tests' => count($results),
-            'avg_scores' => $avgScores,
-            'most_popular_profile' => $mostPopular,
-            'top_careers' => $topCareers,
-            'completion_rate' => 100
-        ];
+            return [
+                'total_tests' => count($results),
+                'avg_scores' => $avgScores,
+                'most_popular_profile' => $mostPopular,
+                'top_careers' => $topCareers,
+                'completion_rate' => 100
+            ];
+        } catch (\Exception $e) {
+            Log::error('Error analizando tendencias: ' . $e->getMessage());
+            return [
+                'total_tests' => count($results),
+                'avg_scores' => [],
+                'most_popular_profile' => 'desconocido',
+                'top_careers' => [],
+                'completion_rate' => 0
+            ];
+        }
     }
 
     public function getClusteringData()
     {
-        $results = $this->clusteringRepository->getAllCompletedTests();
+        try {
+            $results = TestResult::obtenerTodosLosResultados();
 
-        if (count($results) < 10) {
-            return response()->json(['error' => 'Datos insuficientes'], 400);
+            if (count($results) < 10) {
+                return response()->json(['error' => 'Datos insuficientes'], 400);
+            }
+
+            $data = $this->prepareDataForClustering($results);
+            $clusters = $this->kMeansClustering($data, 6);
+            $clusterStats = $this->calculateClusterStatistics($clusters, $results);
+
+            return response()->json([
+                'clusters' => $clusterStats,
+                'total_results' => count($results)
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Error en getClusteringData: ' . $e->getMessage());
+            return response()->json(['error' => 'Error al procesar datos de clustering'], 500);
         }
-
-        $data = $this->prepareDataForClustering($results);
-        $clusters = $this->kMeansClustering($data, 6);
-        $clusterStats = $this->calculateClusterStatistics($clusters, $results);
-
-        return response()->json([
-            'clusters' => $clusterStats,
-            'total_results' => count($results)
-        ]);
     }
 }

@@ -238,6 +238,21 @@ return new class extends Migration
             END
         ');
 
+        // SP: Obtener tests completados por usuario
+        DB::unprepared('DROP PROCEDURE IF EXISTS sp_get_user_completed_tests');
+        DB::unprepared('
+            CREATE PROCEDURE sp_get_user_completed_tests(
+                IN p_user_id BIGINT
+            )
+            BEGIN
+                SELECT DISTINCT vocational_test_id
+                FROM test_results 
+                WHERE user_id = p_user_id 
+                AND completed_at IS NOT NULL
+                ORDER BY completed_at DESC;
+            END
+        ');
+
         // SP: Verificar si test está completado
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_check_test_completed');
         DB::unprepared('
@@ -452,6 +467,7 @@ return new class extends Migration
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_calculate_category_scores');
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_save_test_result');
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_get_test_result');
+        DB::unprepared('DROP PROCEDURE IF EXISTS sp_get_user_completed_tests');
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_check_test_completed');
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_get_all_careers');
         DB::unprepared('DROP PROCEDURE IF EXISTS sp_get_careers_by_faculty');
