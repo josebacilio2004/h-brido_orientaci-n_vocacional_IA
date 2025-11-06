@@ -32,7 +32,7 @@ class AuthController extends Controller
 
         if (Auth::attempt($credentials)) {
             $request->session()->regenerate();
-            return redirect()->intended('/dashboard');
+            return $this->redirectByRole(Auth::user());
         }
 
         return back()->withErrors([
@@ -65,7 +65,7 @@ class AuthController extends Controller
             ]);
 
             Auth::login($user);
-            return redirect('/dashboard');
+            return $this->redirectByRole($user);
         } catch (\Exception $e) {
             Log::error('Error en registro: ' . $e->getMessage());
             return back()->with('error', 'Error al registrarse. Por favor intenta de nuevo.');
@@ -78,5 +78,20 @@ class AuthController extends Controller
         $request->session()->invalidate();
         $request->session()->regenerateToken();
         return redirect('/');
+    }
+
+    private function redirectByRole(User $user)
+    {
+        switch ($user->role) {
+            case 'admin':
+                return redirect()->route('counselor.dashboard');
+            case 'counselor':
+                return redirect()->route('counselor.dashboard');
+            case 'psychologist':
+                return redirect()->route('psychologist.dashboard');
+            default:
+                // Students and any other role
+                return redirect()->route('dashboard');
+        }
     }
 }

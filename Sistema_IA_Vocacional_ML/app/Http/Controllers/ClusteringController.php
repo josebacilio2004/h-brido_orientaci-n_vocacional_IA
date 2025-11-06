@@ -11,7 +11,6 @@ class ClusteringController extends \Illuminate\Routing\Controller
     public function __construct()
     {
         $this->middleware('auth');
-        $this->middleware('admin')->only('dashboard', 'getClusteringData');
     }
 
     public function dashboard()
@@ -51,11 +50,11 @@ class ClusteringController extends \Illuminate\Routing\Controller
         foreach ($results as $result) {
             try {
                 $scores = is_string($result->scores) ? json_decode($result->scores, true) : $result->scores;
-                
+
                 if (!is_array($scores)) {
                     $scores = [];
                 }
-                
+
                 // Normalizar puntajes (0-1)
                 $normalized = [];
                 foreach (['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'] as $category) {
@@ -193,10 +192,10 @@ class ClusteringController extends \Illuminate\Routing\Controller
                 foreach ($clusterData as $point) {
                     $result = collect($results)->firstWhere('id', $point['id']);
                     if ($result) {
-                        $recommendedCareers = is_string($result->recommended_careers) 
-                            ? json_decode($result->recommended_careers, true) 
+                        $recommendedCareers = is_string($result->recommended_careers)
+                            ? json_decode($result->recommended_careers, true)
                             : $result->recommended_careers;
-                        
+
                         if (isset($recommendedCareers[0]['careers']) && is_array($recommendedCareers[0]['careers'])) {
                             foreach ($recommendedCareers[0]['careers'] as $career) {
                                 $careers[] = $career;
@@ -229,7 +228,7 @@ class ClusteringController extends \Illuminate\Routing\Controller
             }
         }
 
-        usort($stats, function($a, $b) {
+        usort($stats, function ($a, $b) {
             return $b['size'] - $a['size'];
         });
 
@@ -240,10 +239,10 @@ class ClusteringController extends \Illuminate\Routing\Controller
     {
         try {
             $categories = ['realista', 'investigador', 'artistico', 'social', 'emprendedor', 'convencional'];
-            
+
             $avgScores = [];
             foreach ($categories as $category) {
-                $scores = collect($results)->map(function($result) use ($category) {
+                $scores = collect($results)->map(function ($result) use ($category) {
                     $scores = is_string($result->scores) ? json_decode($result->scores, true) : $result->scores;
                     return $scores[$category] ?? 0;
                 });
@@ -255,17 +254,17 @@ class ClusteringController extends \Illuminate\Routing\Controller
 
             $allCareers = [];
             foreach ($results as $result) {
-                $recommendedCareers = is_string($result->recommended_careers) 
-                    ? json_decode($result->recommended_careers, true) 
+                $recommendedCareers = is_string($result->recommended_careers)
+                    ? json_decode($result->recommended_careers, true)
                     : $result->recommended_careers;
-                
+
                 if (isset($recommendedCareers[0]['careers']) && is_array($recommendedCareers[0]['careers'])) {
                     foreach ($recommendedCareers[0]['careers'] as $career) {
                         $allCareers[] = $career;
                     }
                 }
             }
-            
+
             $careerCounts = array_count_values($allCareers);
             arsort($careerCounts);
             $topCareers = array_slice($careerCounts, 0, 10, true);

@@ -19,8 +19,8 @@ class ClusteringRepository
     public function getClusteringData()
     {
         $results = $this->clusteringDAO->getAllTestResults();
-        
-        return $results->map(function($result) {
+
+        return $results->map(function ($result) {
             return [
                 'id' => $result->id,
                 'user_id' => $result->user_id,
@@ -46,10 +46,10 @@ class ClusteringRepository
     public function getGeneralStatistics()
     {
         $stats = $this->clusteringDAO->getClusteringStats();
-        
+
         $totalTests = $stats['total_clusters'] ?? 0;
         $totalUsers = $stats['total_users'] ?? 0;
-        
+
         return [
             'total_tests' => $totalTests,
             'total_users' => $totalUsers,
@@ -64,7 +64,7 @@ class ClusteringRepository
     public function getRiasecDistribution()
     {
         $results = $this->clusteringDAO->getAllTestResults();
-        
+
         $distribution = [
             'realista' => 0,
             'investigador' => 0,
@@ -73,7 +73,7 @@ class ClusteringRepository
             'emprendedor' => 0,
             'convencional' => 0
         ];
-        
+
         foreach ($results as $result) {
             $scores = json_decode($result->scores, true);
             if ($scores && is_array($scores)) {
@@ -83,7 +83,7 @@ class ClusteringRepository
                 }
             }
         }
-        
+
         return $distribution;
     }
 
@@ -125,8 +125,8 @@ class ClusteringRepository
     public function getTestResultsWithFilters(array $filters)
     {
         $results = $this->clusteringDAO->getTestResultsWithFilters($filters);
-        
-        return $results->map(function($result) {
+
+        return $results->map(function ($result) {
             return [
                 'id' => $result->id,
                 'user_id' => $result->user_id,
@@ -136,5 +136,34 @@ class ClusteringRepository
                 'completed_at' => $result->completed_at
             ];
         })->toArray();
+    }
+
+    /**
+     * Guardar resultados del clustering
+     */
+    public function saveClusteringResults(array $data)
+    {
+        // Convertir los datos a un formato compatible con tu DAO
+        $clusterData = [
+            'cluster_stats' => $data['cluster_stats'],
+            'trends' => $data['trends'],
+            'analyzed_at' => $data['analyzed_at'],
+            'total_samples' => $data['total_samples']
+        ];
+
+        // Si necesitas un clusterId específico, puedes generarlo o usar uno por defecto
+        $clusterId = 1; // o generar un ID único
+
+        // Obtener los user_ids de los resultados si están disponibles
+        $userIds = [];
+        if (isset($data['results'])) {
+            foreach ($data['results'] as $result) {
+                if (isset($result['user_id'])) {
+                    $userIds[] = $result['user_id'];
+                }
+            }
+        }
+
+        return $this->clusteringDAO->saveCluster($clusterId, $userIds, $clusterData);
     }
 }

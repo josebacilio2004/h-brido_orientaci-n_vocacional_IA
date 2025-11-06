@@ -6,6 +6,9 @@ use App\Models\VocationalTest;
 use App\Models\TestResponse;
 use App\Models\TestResult;
 use App\Models\StudentGrade;
+use App\Models\TestInterest;
+use App\Models\TestSkill;
+use App\Models\TestPersonality;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
@@ -25,9 +28,16 @@ class TestController extends BaseController
     {
         try {
             $tests = VocationalTest::obtenerActivos();
-            $completedTests = VocationalTest::obtenerTestsCompletados(Auth::id());
+            $interestTests = TestInterest::obtenerActivos();
+            $skillTests = TestSkill::obtenerActivos();
+            $personalityTests = TestPersonality::obtenerActivos();
 
-            return view('tests.index', compact('tests', 'completedTests'));
+            $completedTests = VocationalTest::obtenerTestsCompletados(Auth::id());
+            $completedInterestTests = TestInterest::obtenerTestsCompletados(Auth::id());
+            $completedSkillTests = TestSkill::obtenerTestsCompletados(Auth::id());
+            $completedPersonalityTests = TestPersonality::obtenerTestsCompletados(Auth::id());
+
+            return view('tests.index', compact('tests', 'completedTests', 'interestTests', 'skillTests', 'personalityTests', 'completedInterestTests', 'completedSkillTests', 'completedPersonalityTests'));
         } catch (\Exception $e) {
             Log::error('Error en index: ' . $e->getMessage());
             return redirect()->route('dashboard')->with('error', 'Error al cargar los tests.');
@@ -543,12 +553,514 @@ class TestController extends BaseController
             'Nota_Educacion_Trabajo' => $grades['nota_educacion_trabajo'],
         ];
 
-        $response = Http::timeout(10)->post($apiUrl, $data);
+        try {
+            $response = Http::timeout(10)->post($apiUrl, $data);
 
-        if ($response->successful()) {
-            return $response->json();
+            if ($response->successful()) {
+                $responseData = $response->json();
+
+                // Normalize response format
+                return [
+                    'predictions' => $responseData['predictions'] ?? $responseData['top_careers'] ?? [],
+                    'confidence' => $responseData['confidence'] ?? $responseData['accuracy'] ?? $responseData['score'] ?? 85,
+                    'analysis' => $responseData['analysis'] ?? $responseData['explanation'] ?? 'Análisis basado en tu desempeño académico',
+                    'model_info' => $responseData['model_info'] ?? null
+                ];
+            }
+
+            Log::warning('ML API returned error: ' . $response->status());
+            throw new \Exception('Respuesta inválida del servicio de IA');
+        } catch (\Exception $e) {
+            Log::error('ML API Error: ' . $e->getMessage());
+
+            Log::info('Generating fallback prediction using RIASEC system');
+            return $this->generateFallbackPrediction($grades);
+        }
+    }
+
+    private function generateFallbackPrediction($grades)
+    {
+        // Calculate simple scores based on subject performance
+        $riasecScores = [
+            'realista' => (($grades['nota_matematica'] + $grades['nota_ciencia_tecnologia']) / 2),
+            'investigador' => (($grades['nota_matematica'] + $grades['nota_ciencia_tecnologia']) / 2),
+            'artistico' => (($grades['nota_comunicacion'] + $grades['nota_desarrollo_personal']) / 2),
+            'social' => (($grades['nota_desarrollo_personal'] + $grades['nota_ciudadania_civica']) / 2),
+            'emprendedor' => (($grades['nota_ciudadania_civica'] + $grades['nota_desarrollo_personal']) / 2),
+            'convencional' => (($grades['nota_matematica'] + $grades['nota_comunicacion']) / 2),
+        ];
+
+        // Get career recommendations based on RIASEC scores
+        $careersRecommended = $this->getRecommendedCareersRIASEC($riasecScores);
+
+        // Format as career predictions
+        $predictions = [];
+        foreach ($careersRecommended as $category) {
+            foreach ($category['careers'] as $career) {
+                $predictions[] = [
+                    'name' => $career,
+                    'probability' => $category['percentage']
+                ];
+            }
         }
 
-        throw new \Exception('Error al conectar con el servicio de IA');
+        // Return in normalized format
+        return [
+            'predictions' => array_slice($predictions, 0, 8),
+            'confidence' => 75,
+            'analysis' => 'Esta predicción se generó utilizando el análisis RIASEC basado en tus calificaciones académicas.',
+            'model_info' => 'Fallback - Sistema RIASEC'
+        ];
+    }
+
+    // Métodos para Interest Test
+    public function showInterestTest($id)
+    {
+        try {
+            $test = TestInterest::obtenerConPreguntas($id);
+
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $hasCompleted = TestInterest::estaCompletado(Auth::id(), $id);
+
+            if ($hasCompleted) {
+                return redirect()->route('tests.interest.result', $id)
+                    ->with('info', 'Ya has completado este test.');
+            }
+
+            return view('tests.interests.show', compact('test'));
+        } catch (\Exception $e) {
+            Log::error('Error en showInterestTest: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar el test.');
+        }
+    }
+
+    public function interestQuestion($id, $questionNumber)
+    {
+        try {
+            $test = TestInterest::find($id);
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $question = TestInterest::obtenerPregunta($id, $questionNumber);
+            if (!$question) {
+                abort(404, 'Pregunta no encontrada');
+            }
+
+            $previousAnswer = TestInterest::obtenerRespuestaPrevia(Auth::id(), $id, $question->id);
+            $totalQuestions = $test->total_questions;
+            $currentQuestion = $questionNumber;
+            $progress = ($questionNumber / $totalQuestions) * 100;
+
+            return view('tests.interests.question', compact('test', 'question', 'previousAnswer', 'totalQuestions', 'currentQuestion', 'progress'));
+        } catch (\Exception $e) {
+            Log::error('Error en interestQuestion: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar la pregunta.');
+        }
+    }
+
+    public function saveInterestAnswer(Request $request, $id, $questionNumber)
+    {
+        try {
+            $validated = $request->validate(['answer' => 'required']);
+
+            $test = TestInterest::find($id);
+            $question = TestInterest::obtenerPregunta($id, $questionNumber);
+
+            if (!$test || !$question) {
+                throw new \Exception('Test o pregunta no encontrada');
+            }
+
+            $score = (int)$validated['answer'];
+            TestInterest::guardarRespuesta(Auth::id(), $id, $question->id, $validated['answer'], $score);
+
+            if ($questionNumber == $test->total_questions) {
+                return $this->processInterestTest($id);
+            }
+
+            return redirect()->route('tests.interest.question', [
+                'id' => $id,
+                'question' => $questionNumber + 1
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error guardando respuesta interest: " . $e->getMessage());
+            return back()->with('error', 'Error al guardar respuesta.');
+        }
+    }
+
+    private function processInterestTest($id)
+    {
+        try {
+            $test = TestInterest::find($id);
+            $user = Auth::user();
+
+            $scores = TestInterest::calcularPuntajesPorCategoria($user->id, $id);
+
+            if (empty($scores)) {
+                throw new \Exception("No se pudieron calcular los puntajes");
+            }
+
+            $scoresArray = [];
+            foreach ($scores as $score) {
+                $scoresArray[$score->category] = $score->total_score;
+            }
+
+            $analysis = $this->generateInterestAnalysis($scoresArray);
+            $recommendedCareers = $this->getInterestRecommendedCareers($scoresArray);
+
+            TestInterest::guardarResultado($user->id, $id, $scoresArray, $recommendedCareers, $analysis, array_sum($scoresArray));
+
+            return redirect()->route('tests.interest.result', $id)
+                ->with('success', '¡Test completado exitosamente!');
+        } catch (\Exception $e) {
+            Log::error("Error procesando test interest: " . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al procesar el test.');
+        }
+    }
+
+    public function interestResult($id)
+    {
+        try {
+            $result = TestInterest::obtenerResultado(Auth::id(), $id);
+
+            if (!$result) {
+                return redirect()->route('tests.index')
+                    ->with('error', 'Aún no has completado este test.');
+            }
+
+            $test = TestInterest::find($id);
+            $scores = json_decode($result->scores, true) ?? [];
+            $analysis = $result->analysis;
+            $recommendedCareers = json_decode($result->recommended_careers, true) ?? [];
+
+            return view('tests.interests.result', compact('test', 'scores', 'analysis', 'recommendedCareers'));
+        } catch (\Exception $e) {
+            Log::error('Error en interestResult: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar resultados.');
+        }
+    }
+
+    // Métodos para Skill Test
+    public function showSkillTest($id)
+    {
+        try {
+            $test = TestSkill::obtenerConPreguntas($id);
+
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $hasCompleted = TestSkill::estaCompletado(Auth::id(), $id);
+
+            if ($hasCompleted) {
+                return redirect()->route('tests.skill.result', $id)
+                    ->with('info', 'Ya has completado este test.');
+            }
+
+            return view('tests.skills.show', compact('test'));
+        } catch (\Exception $e) {
+            Log::error('Error en showSkillTest: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar el test.');
+        }
+    }
+
+    public function skillQuestion($id, $questionNumber)
+    {
+        try {
+            $test = TestSkill::find($id);
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $question = TestSkill::obtenerPregunta($id, $questionNumber);
+            if (!$question) {
+                abort(404, 'Pregunta no encontrada');
+            }
+
+            $previousAnswer = TestSkill::obtenerRespuestaPrevia(Auth::id(), $id, $question->id);
+            $totalQuestions = $test->total_questions;
+            $currentQuestion = $questionNumber;
+            $progress = ($questionNumber / $totalQuestions) * 100;
+
+            return view('tests.skills.question', compact('test', 'question', 'previousAnswer', 'totalQuestions', 'currentQuestion', 'progress'));
+        } catch (\Exception $e) {
+            Log::error('Error en skillQuestion: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar la pregunta.');
+        }
+    }
+
+    public function saveSkillAnswer(Request $request, $id, $questionNumber)
+    {
+        try {
+            Log::info("=== GUARDANDO RESPUESTA SKILL ===");
+            Log::info("Test: {$id}, Pregunta: {$questionNumber}");
+
+            $validated = $request->validate(['answer' => 'required']);
+
+            $test = TestSkill::find($id);
+            $question = TestSkill::obtenerPregunta($id, $questionNumber);
+
+            if (!$test || !$question) {
+                throw new \Exception('Test o pregunta no encontrada');
+            }
+
+            Log::info("Total preguntas: {$test->total_questions}, Pregunta actual: {$questionNumber}");
+
+            $score = (int)$validated['answer'];
+            TestSkill::guardarRespuesta(Auth::id(), $id, $question->id, $validated['answer'], $score);
+
+            // ✅ VERIFICAR SI ES LA ÚLTIMA PREGUNTA
+            if ($questionNumber == $test->total_questions) {
+                Log::info("ÚLTIMA PREGUNTA - PROCESANDO TEST");
+                return $this->processSkillTest($id);
+            }
+
+            return redirect()->route('tests.skill.question', [
+                'id' => $id,
+                'question' => $questionNumber + 1
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error guardando respuesta skill: " . $e->getMessage());
+            Log::error($e->getTraceAsString());
+            return back()->with('error', 'Error al guardar respuesta.');
+        }
+    }
+
+    private function processSkillTest($id)
+    {
+        try {
+            $test = TestSkill::find($id);
+            $user = Auth::user();
+
+            $scores = TestSkill::calcularPuntajesPorCategoria($user->id, $id);
+
+            if (empty($scores)) {
+                throw new \Exception("No se pudieron calcular los puntajes");
+            }
+
+            $scoresArray = [];
+            foreach ($scores as $score) {
+                $scoresArray[$score->category] = $score->total_score;
+            }
+
+            $analysis = $this->generateSkillAnalysis($scoresArray);
+            $recommendedCareers = $this->getSkillRecommendedCareers($scoresArray);
+
+            // ✅ VERIFICAR QUE SE GUARDE CORRECTAMENTE
+            $result = TestSkill::guardarResultado($user->id, $id, $scoresArray, $recommendedCareers, $analysis, array_sum($scoresArray));
+
+            if (!$result) {
+                throw new \Exception("No se pudo guardar el resultado en la base de datos");
+            }
+
+            Log::info("Test de habilidades completado exitosamente - ID: " . ($result->id ?? 'N/A'));
+
+            return redirect()->route('tests.skill.result', $id)
+                ->with('success', '¡Test completado exitosamente!');
+        } catch (\Exception $e) {
+            Log::error("Error procesando test skill: " . $e->getMessage());
+            Log::error($e->getTraceAsString());
+            return redirect()->route('tests.index')->with('error', 'Error al procesar el test: ' . $e->getMessage());
+        }
+    }
+
+    public function skillResult($id)
+    {
+        try {
+            $result = TestSkill::obtenerResultado(Auth::id(), $id);
+
+            if (!$result) {
+                return redirect()->route('tests.index')
+                    ->with('error', 'Aún no has completado este test.');
+            }
+
+            $test = TestSkill::find($id);
+            $scores = json_decode($result->scores, true) ?? [];
+            $analysis = $result->analysis;
+            $recommendedCareers = json_decode($result->recommended_careers, true) ?? [];
+
+            return view('tests.skills.result', compact('test', 'scores', 'analysis', 'recommendedCareers'));
+        } catch (\Exception $e) {
+            Log::error('Error en skillResult: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar resultados.');
+        }
+    }
+
+    public function showPersonalityTest($id)
+    {
+        try {
+            $test = TestPersonality::obtenerConPreguntas($id);
+
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $hasCompleted = TestPersonality::estaCompletado(Auth::id(), $id);
+
+            if ($hasCompleted) {
+                return redirect()->route('tests.personality.result', $id)
+                    ->with('info', 'Ya has completado este test.');
+            }
+
+            return view('tests.personality.show', compact('test'));
+        } catch (\Exception $e) {
+            Log::error('Error en showPersonalityTest: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar el test.');
+        }
+    }
+
+    public function personalityQuestion($id, $questionNumber)
+    {
+        try {
+            $test = TestPersonality::find($id);
+            if (!$test) {
+                abort(404, 'Test no encontrado');
+            }
+
+            $question = TestPersonality::obtenerPregunta($id, $questionNumber);
+            if (!$question) {
+                abort(404, 'Pregunta no encontrada');
+            }
+
+            $previousAnswer = TestPersonality::obtenerRespuestaPrevia(Auth::id(), $id, $question->id);
+            $totalQuestions = $test->total_questions;
+            $currentQuestion = $questionNumber;
+            $progress = ($questionNumber / $totalQuestions) * 100;
+
+            return view('tests.personality.question', compact('test', 'question', 'previousAnswer', 'totalQuestions', 'currentQuestion', 'progress'));
+        } catch (\Exception $e) {
+            Log::error('Error en personalityQuestion: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar la pregunta.');
+        }
+    }
+
+    public function savePersonalityAnswer(Request $request, $id, $questionNumber)
+    {
+        try {
+            $validated = $request->validate(['answer' => 'required']);
+
+            $test = TestPersonality::find($id);
+            $question = TestPersonality::obtenerPregunta($id, $questionNumber);
+
+            if (!$test || !$question) {
+                throw new \Exception('Test o pregunta no encontrada');
+            }
+
+            $score = (int)$validated['answer'];
+            TestPersonality::guardarRespuesta(Auth::id(), $id, $question->id, $validated['answer'], $score);
+
+            if ($questionNumber == $test->total_questions) {
+                return $this->processPersonalityTest($id);
+            }
+
+            return redirect()->route('tests.personality.question', [
+                'id' => $id,
+                'question' => $questionNumber + 1
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error guardando respuesta personality: " . $e->getMessage());
+            return back()->with('error', 'Error al guardar respuesta.');
+        }
+    }
+
+    private function processPersonalityTest($id)
+    {
+        try {
+            $test = TestPersonality::find($id);
+            $user = Auth::user();
+
+            $scores = TestPersonality::calcularPuntajesPorCategoria($user->id, $id);
+
+            if (empty($scores)) {
+                throw new \Exception("No se pudieron calcular los puntajes");
+            }
+
+            $scoresArray = [];
+            foreach ($scores as $score) {
+                $scoresArray[$score->category] = $score->total_score;
+            }
+
+            $analysis = $this->generatePersonalityAnalysis($scoresArray);
+            $recommendedCareers = $this->getPersonalityRecommendedCareers($scoresArray);
+
+            TestPersonality::guardarResultado($user->id, $id, $scoresArray, $recommendedCareers, $analysis, array_sum($scoresArray));
+
+            return redirect()->route('tests.personality.result', $id)
+                ->with('success', '¡Test completado exitosamente!');
+        } catch (\Exception $e) {
+            Log::error("Error procesando test personality: " . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al procesar el test.');
+        }
+    }
+
+    public function personalityResult($id)
+    {
+        try {
+            $result = TestPersonality::obtenerResultado(Auth::id(), $id);
+
+            if (!$result) {
+                return redirect()->route('tests.index')
+                    ->with('error', 'Aún no has completado este test.');
+            }
+
+            $test = TestPersonality::find($id);
+            $scores = json_decode($result->scores, true) ?? [];
+            $analysis = $result->analysis;
+            $recommendedCareers = json_decode($result->recommended_careers, true) ?? [];
+
+            return view('tests.personality.result', compact('test', 'scores', 'analysis', 'recommendedCareers'));
+        } catch (\Exception $e) {
+            Log::error('Error en personalityResult: ' . $e->getMessage());
+            return redirect()->route('tests.index')->with('error', 'Error al cargar resultados.');
+        }
+    }
+
+    private function generateInterestAnalysis($scores)
+    {
+        arsort($scores);
+        $topCategory = array_key_first($scores);
+        $topScore = $scores[$topCategory] ?? 0;
+
+        return "Tus principales áreas de interés son " . implode(", ", array_slice(array_keys($scores), 0, 3)) .
+            ". Estos intereses sugieren que deberías explorar carreras relacionadas con estas áreas.";
+    }
+
+    private function getInterestRecommendedCareers($scores)
+    {
+        arsort($scores);
+        return array_slice(array_keys($scores), 0, 3);
+    }
+
+    private function generateSkillAnalysis($scores)
+    {
+        arsort($scores);
+        $topCategory = array_key_first($scores);
+
+        return "Tus habilidades más desarrolladas son en " . implode(", ", array_slice(array_keys($scores), 0, 3)) .
+            ". Estas fortalezas te abrirán muchas puertas en el mundo laboral.";
+    }
+
+    private function getSkillRecommendedCareers($scores)
+    {
+        arsort($scores);
+        return array_slice(array_keys($scores), 0, 3);
+    }
+
+    private function generatePersonalityAnalysis($scores)
+    {
+        arsort($scores);
+        $topCategory = array_key_first($scores);
+
+        return "Tu tipo de personalidad predominante es " . $topCategory .
+            ". Esto significa que prefieres ambientes y trabajos que se alineen con estas características.";
+    }
+
+    private function getPersonalityRecommendedCareers($scores)
+    {
+        arsort($scores);
+        return array_slice(array_keys($scores), 0, 3);
     }
 }
