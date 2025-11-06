@@ -79,7 +79,7 @@ class DashboardController extends \Illuminate\Routing\Controller
         $this->requireCounselorAccess();
 
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
+            $user = Auth::user();
             $totalStudents = User::where('role', 'student')->count();
             $completedTests = TestResult::whereNotNull('completed_at')->count();
             $averageScore = TestResult::whereNotNull('total_score')->avg('total_score');
@@ -105,7 +105,7 @@ class DashboardController extends \Illuminate\Routing\Controller
                 });
 
             return view('counselor.dashboard', compact(
-                'user', // ← AGREGAR ESTA VARIABLE
+                'user',
                 'totalStudents',
                 'completedTests',
                 'averageScore',
@@ -123,12 +123,12 @@ class DashboardController extends \Illuminate\Routing\Controller
         $this->requireCounselorAccess();
 
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
+            $user = Auth::user();
             $students = User::where('role', 'student')
                 ->with(['testResults', 'aiPredictions'])
                 ->paginate(20);
             
-            return view('counselor.students', compact('user', 'students')); // ← AGREGAR $user
+            return view('counselor.students', compact('user', 'students'));
         } catch (\Exception $e) {
             Log::error('Error en counselor students: ' . $e->getMessage());
             return redirect()->route('counselor.dashboard')->with('error', 'Error al cargar la lista de estudiantes.');
@@ -140,7 +140,7 @@ class DashboardController extends \Illuminate\Routing\Controller
         $this->requireCounselorAccess();
 
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
+            $user = Auth::user();
             $student = User::where('role', 'student')->findOrFail($id);
             $latestResult = TestResult::where('user_id', $id)
                 ->orderBy('completed_at', 'desc')
@@ -164,7 +164,7 @@ class DashboardController extends \Illuminate\Routing\Controller
                     return $response->question->category;
                 });
 
-            return view('counselor.student-prediction', compact('user', 'student', 'latestResult', 'interests', 'skills')); // ← AGREGAR $user
+            return view('counselor.student-prediction', compact('user', 'student', 'latestResult', 'interests', 'skills'));
         } catch (\Exception $e) {
             Log::error('Error en student prediction: ' . $e->getMessage());
             return redirect()->route('counselor.students')->with('error', 'Error al cargar la predicción del estudiante.');
@@ -174,11 +174,17 @@ class DashboardController extends \Illuminate\Routing\Controller
     // Nuevos métodos para el dashboard de psicólogos
     public function psychologistDashboard()
     {
-        $this->requirePsychologistAccess();
+        if (!Auth::check()) {
+            return redirect()->route('login');
+        }
+
+        $user = Auth::user();
+
+        if (!in_array($user->role, ['admin', 'psychologist'])) {
+            abort(403, 'No tienes permisos de psicólogo para acceder a esta sección.');
+        }
 
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA (SOLUCIÓN PRINCIPAL)
-
             // Estadísticas de tests
             $testStats = [
                 'total' => TestResult::count(),
@@ -220,27 +226,39 @@ class DashboardController extends \Illuminate\Routing\Controller
                     })->toArray();
             }
 
-            // Tipos de personalidad más comunes
             $personalityTypes = [];
             if ($totalProfiles > 0) {
-                $personalityTypes = PersonalityResult::select('primary_type')
-                    ->selectRaw('COUNT(*) as count')
-                    ->groupBy('primary_type')
-                    ->orderByDesc('count')
-                    ->limit(5)
-                    ->get()
-                    ->map(function($type) use($totalProfiles) {
-                        $percentage = $totalProfiles > 0 ? round(($type->count / $totalProfiles) * 100) : 0;
-                        return [
-                            'name' => $type->primary_type,
-                            'count' => $type->count,
-                            'percentage' => $percentage
-                        ];
-                    })->toArray();
+                $results = PersonalityResult::get();
+                $personalityTypeCounts = [];
+                
+                foreach ($results as $result) {
+                    if ($result->scores && is_array($result->scores)) {
+                        // Obtener el trait principal (el primero o el más alto)
+                        $traits = $result->scores;
+                        if (!empty($traits)) {
+                            $primaryTrait = array_key_first($traits);
+                            if ($primaryTrait) {
+                                $personalityTypeCounts[$primaryTrait] = ($personalityTypeCounts[$primaryTrait] ?? 0) + 1;
+                            }
+                        }
+                    }
+                }
+                
+                // Ordenar y tomar los top 5
+                arsort($personalityTypeCounts);
+                $personalityTypes = array_slice($personalityTypeCounts, 0, 5);
+                $personalityTypes = array_map(function($name, $count) use($totalProfiles) {
+                    $percentage = $totalProfiles > 0 ? round(($count / $totalProfiles) * 100) : 0;
+                    return [
+                        'name' => $name,
+                        'count' => $count,
+                        'percentage' => $percentage
+                    ];
+                }, array_keys($personalityTypes), array_values($personalityTypes));
             }
 
             return view('psychologist.dashboard', compact(
-                'user', // ← AGREGAR ESTA VARIABLE (SOLUCIÓN PRINCIPAL)
+                'user',
                 'testStats',
                 'profileStats',
                 'predictionStats',
@@ -249,7 +267,7 @@ class DashboardController extends \Illuminate\Routing\Controller
             ));
         } catch (\Exception $e) {
             Log::error('Error en psychologist dashboard: ' . $e->getMessage());
-            return redirect('/dashboard')->with('error', 'Error al cargar el dashboard de psicólogos.');
+            return back()->with('error', 'Error al cargar el dashboard de psicólogos: ' . $e->getMessage());
         }
     }
 
@@ -258,9 +276,8 @@ class DashboardController extends \Illuminate\Routing\Controller
         $this->requirePsychologistAccess();
 
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
-            // Implementar análisis detallados adicionales según sea necesario
-            return view('psychologist.analytics', compact('user')); // ← AGREGAR $user
+            $user = Auth::user();
+            return view('psychologist.analytics', compact('user'));
         } catch (\Exception $e) {
             Log::error('Error en psychologist analytics: ' . $e->getMessage());
             return redirect('/dashboard')->with('error', 'Error al cargar los análisis.');
@@ -270,8 +287,8 @@ class DashboardController extends \Illuminate\Routing\Controller
     public function tests()
     {
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
-            return view('dashboard.tests', compact('user')); // ← AGREGAR $user
+            $user = Auth::user();
+            return view('dashboard.tests', compact('user'));
         } catch (\Exception $e) {
             Log::error('Error en dashboard tests: ' . $e->getMessage());
             return redirect()->route('dashboard')->with('error', 'Error al cargar tests.');
@@ -281,7 +298,7 @@ class DashboardController extends \Illuminate\Routing\Controller
     public function careers()
     {
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
+            $user = Auth::user();
             $careers = Career::all();
             $faculties = Career::distinct()
                 ->pluck('faculty')
@@ -289,17 +306,17 @@ class DashboardController extends \Illuminate\Routing\Controller
                 ->values()
                 ->toArray();
             
-            return view('dashboard.careers', compact('user', 'careers', 'faculties')); // ← AGREGAR $user
+            return view('dashboard.careers', compact('user', 'careers', 'faculties'));
         } catch (\Exception $e) {
             Log::error('Error en dashboard careers: ' . $e->getMessage());
-            return view('dashboard.careers', ['user' => Auth::user(), 'careers' => [], 'faculties' => []]); // ← AGREGAR $user
+            return view('dashboard.careers', ['user' => Auth::user(), 'careers' => [], 'faculties' => []]);
         }
     }
 
     public function recommendations()
     {
         try {
-            $user = Auth::user(); // ← AGREGAR ESTA LÍNEA
+            $user = Auth::user();
             $latestResult = TestResult::where('user_id', Auth::id())
                 ->orderBy('completed_at', 'desc')
                 ->first();
@@ -313,10 +330,10 @@ class DashboardController extends \Illuminate\Routing\Controller
                 }
             }
             
-            return view('dashboard.recommendations', compact('user', 'latestResult')); // ← AGREGAR $user
+            return view('dashboard.recommendations', compact('user', 'latestResult'));
         } catch (\Exception $e) {
             Log::error('Error en dashboard recommendations: ' . $e->getMessage());
-            return view('dashboard.recommendations', ['user' => Auth::user(), 'latestResult' => null]); // ← AGREGAR $user
+            return view('dashboard.recommendations', ['user' => Auth::user(), 'latestResult' => null]);
         }
     }
 

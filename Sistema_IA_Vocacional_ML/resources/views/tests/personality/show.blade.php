@@ -41,7 +41,7 @@
                 <a href="{{ route('tests.index') }}" class="flex-1 bg-white/10 text-white px-6 py-3 rounded-lg font-semibold hover:bg-white/20 transition-all text-center">
                     Cancelar
                 </a>
-                <a href="{{ route('tests.index', ['testId' => $test->id, 'questionNumber' => 1]) }}" class="flex-1 bg-gradient-to-r from-pink-600 to-rose-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-pink-700 hover:to-rose-700 transition-all text-center">
+                <a href="{{ route('tests.personality.question', ['id' => $test->id, 'question' => 1]) }}" class="flex-1 bg-gradient-to-r from-pink-600 to-rose-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-pink-700 hover:to-rose-700 transition-all text-center">
                     Comenzar
                 </a>
             </div>

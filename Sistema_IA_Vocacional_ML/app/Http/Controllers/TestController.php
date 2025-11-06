@@ -835,7 +835,11 @@ class TestController extends BaseController
             $test = TestSkill::find($id);
             $user = Auth::user();
 
+            Log::info("[v0] processSkillTest START - Test ID: {$id}, User ID: {$user->id}");
+
             $scores = TestSkill::calcularPuntajesPorCategoria($user->id, $id);
+
+            Log::info("[v0] Scores calculated:", (array)$scores);
 
             if (empty($scores)) {
                 throw new \Exception("No se pudieron calcular los puntajes");
@@ -843,26 +847,30 @@ class TestController extends BaseController
 
             $scoresArray = [];
             foreach ($scores as $score) {
-                $scoresArray[$score->category] = $score->total_score;
+                $scoresArray[$score->skill_category] = $score->total_score;
             }
+
+            Log::info("[v0] Scores array formatted:", $scoresArray);
 
             $analysis = $this->generateSkillAnalysis($scoresArray);
             $recommendedCareers = $this->getSkillRecommendedCareers($scoresArray);
 
-            // ✅ VERIFICAR QUE SE GUARDE CORRECTAMENTE
+            Log::info("[v0] About to save result - Scores: " . json_encode($scoresArray));
+
             $result = TestSkill::guardarResultado($user->id, $id, $scoresArray, $recommendedCareers, $analysis, array_sum($scoresArray));
 
             if (!$result) {
+                Log::error("[v0] Result save returned null");
                 throw new \Exception("No se pudo guardar el resultado en la base de datos");
             }
 
-            Log::info("Test de habilidades completado exitosamente - ID: " . ($result->id ?? 'N/A'));
+            Log::info("[v0] Test de habilidades completado exitosamente - ID: " . ($result->id ?? 'N/A'));
 
             return redirect()->route('tests.skill.result', $id)
                 ->with('success', '¡Test completado exitosamente!');
         } catch (\Exception $e) {
-            Log::error("Error procesando test skill: " . $e->getMessage());
-            Log::error($e->getTraceAsString());
+            Log::error("[v0] Error procesando test skill: " . $e->getMessage());
+            Log::error("[v0] Stack trace: " . $e->getTraceAsString());
             return redirect()->route('tests.index')->with('error', 'Error al procesar el test: ' . $e->getMessage());
         }
     }
@@ -972,7 +980,11 @@ class TestController extends BaseController
             $test = TestPersonality::find($id);
             $user = Auth::user();
 
+            Log::info("[v0] processPersonalityTest START - Test ID: {$id}, User ID: {$user->id}");
+
             $scores = TestPersonality::calcularPuntajesPorCategoria($user->id, $id);
+
+            Log::info("[v0] Scores calculated:", (array)$scores);
 
             if (empty($scores)) {
                 throw new \Exception("No se pudieron calcular los puntajes");
@@ -980,19 +992,31 @@ class TestController extends BaseController
 
             $scoresArray = [];
             foreach ($scores as $score) {
-                $scoresArray[$score->category] = $score->total_score;
+                $scoresArray[$score->trait] = $score->total_score;
             }
+
+            Log::info("[v0] Scores array formatted:", $scoresArray);
 
             $analysis = $this->generatePersonalityAnalysis($scoresArray);
             $recommendedCareers = $this->getPersonalityRecommendedCareers($scoresArray);
 
-            TestPersonality::guardarResultado($user->id, $id, $scoresArray, $recommendedCareers, $analysis, array_sum($scoresArray));
+            Log::info("[v0] About to save result - Scores: " . json_encode($scoresArray));
+
+            $result = TestPersonality::guardarResultado($user->id, $id, $scoresArray, $recommendedCareers, $analysis, array_sum($scoresArray));
+
+            if (!$result) {
+                Log::error("[v0] Result save returned null");
+                throw new \Exception("No se pudo guardar el resultado en la base de datos");
+            }
+
+            Log::info("[v0] Test de personalidad completado exitosamente - ID: " . ($result->id ?? 'N/A'));
 
             return redirect()->route('tests.personality.result', $id)
                 ->with('success', '¡Test completado exitosamente!');
         } catch (\Exception $e) {
-            Log::error("Error procesando test personality: " . $e->getMessage());
-            return redirect()->route('tests.index')->with('error', 'Error al procesar el test.');
+            Log::error("[v0] Error procesando test personality: " . $e->getMessage());
+            Log::error("[v0] Stack trace: " . $e->getTraceAsString());
+            return redirect()->route('tests.index')->with('error', 'Error al procesar el test: ' . $e->getMessage());
         }
     }
 

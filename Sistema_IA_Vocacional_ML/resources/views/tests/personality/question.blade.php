@@ -31,7 +31,7 @@ $answeredCount = $currentQuestion - 1;
                 </div>
             </div>
 
-            <form action="{{ route('tests.personality.save-answer', ['testId' => $test->id, 'questionNumber' => $currentQuestion]) }}" method="POST" id="answerForm">
+            <form action="{{ route('tests.personality.save-answer', ['id' => $test->id, 'question' => $currentQuestion]) }}" method="POST" id="answerForm">
                 @csrf
 
                 <div class="space-y-4 mb-8">
@@ -55,14 +55,14 @@ $answeredCount = $currentQuestion - 1;
 
                 <div class="flex gap-4">
                     @if ($currentQuestion > 1)
-                        <a href="{{ route('tests.personality.question', ['testId' => $test->id, 'questionNumber' => $currentQuestion - 1]) }}" class="flex-1 bg-white/10 text-white px-6 py-4 rounded-lg font-semibold hover:bg-white/20 transition-all text-center flex items-center justify-center gap-2">
+                        <a href="{{ route('tests.personality.question', ['id' => $test->id, 'question' => $currentQuestion - 1]) }}" class="flex-1 bg-white/10 text-white px-6 py-4 rounded-lg font-semibold hover:bg-white/20 transition-all text-center flex items-center justify-center gap-2">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
                             </svg>
                             Anterior
                         </a>
                     @else
-                        <a href="{{ route('tests.personality.index') }}" class="flex-1 bg-white/10 text-white px-6 py-4 rounded-lg font-semibold hover:bg-white/20 transition-all text-center">Cancelar</a>
+                        <a href="{{ route('tests.index') }}" class="flex-1 bg-white/10 text-white px-6 py-4 rounded-lg font-semibold hover:bg-white/20 transition-all text-center">Cancelar</a>
                     @endif
 
                     @if ($currentQuestion < $totalQuestions)
@@ -93,14 +93,6 @@ $answeredCount = $currentQuestion - 1;
 </div>
 
 <script>
-    document.querySelectorAll('input[name="answer"]').forEach(input => {
-        input.addEventListener('change', function() {
-            @if ($currentQuestion < $totalQuestions)
-                setTimeout(() => {
-                    document.getElementById('answerForm').submit();
-                }, 300);
-            @endif
-        });
-    });
+    // Users must now click the "Next" button to proceed, allowing them to review their selection
 </script>
 @endsection

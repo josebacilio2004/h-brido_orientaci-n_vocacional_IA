@@ -6,6 +6,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class SkillResult extends Model
 {
+    protected $table = 'skill_results';
+
     protected $fillable = [
         'user_id',
         'test_skill_id',
